@@ -7,219 +7,422 @@
   <style>
     :root {
       color-scheme: light dark;
-      --bg: #f6f7fb;
-      --card: #ffffff;
-      --text: #1b1f24;
-      --muted: #6b7280;
-      --accent: #3b82f6;
-      --border: #e5e7eb;
-      --danger: #ef4444;
-      --warn: #f59e0b;
-      --drop: rgba(59, 130, 246, 0.18);
+      --bg-start: #eef2ff;
+      --bg-end:   #f7f8fc;
+      --card:     rgba(255, 255, 255, 0.78);
+      --card-border: rgba(226, 232, 240, 0.9);
+      --text:     #0f172a;
+      --muted:    #64748b;
+      --accent:   #4f46e5;
+      --accent-2: #ec4899;
+      --accent-soft: rgba(79, 70, 229, 0.10);
+      --border:   rgba(148, 163, 184, 0.25);
+      --danger:   #ef4444;
+      --success:  #10b981;
+      --warn:     #f59e0b;
+      --drop:     rgba(79, 70, 229, 0.12);
       --overdue-bg: rgba(239, 68, 68, 0.08);
-      --label-bg: rgba(59, 130, 246, 0.12);
-      --label-border: rgba(59, 130, 246, 0.35);
+      --overdue-border: rgba(239, 68, 68, 0.35);
+      --label-bg:     rgba(79, 70, 229, 0.10);
+      --label-border: rgba(79, 70, 229, 0.35);
+      --label-public-bg:     rgba(16, 185, 129, 0.12);
+      --label-public-border: rgba(16, 185, 129, 0.45);
+      --shared-bg: rgba(236, 72, 153, 0.05);
+      --shared-border: rgba(236, 72, 153, 0.20);
+      --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+      --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+      --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.12);
     }
     @media (prefers-color-scheme: dark) {
       :root {
-        --bg: #0f172a;
-        --card: #111827;
-        --text: #f3f4f6;
-        --muted: #9ca3af;
-        --border: #1f2937;
-        --overdue-bg: rgba(239, 68, 68, 0.16);
-        --label-bg: rgba(96, 165, 250, 0.18);
-        --label-border: rgba(96, 165, 250, 0.4);
+        --bg-start: #0b1224;
+        --bg-end:   #0f172a;
+        --card:     rgba(17, 24, 39, 0.78);
+        --card-border: rgba(30, 41, 59, 0.9);
+        --text:     #f1f5f9;
+        --muted:    #94a3b8;
+        --accent:   #818cf8;
+        --accent-2: #f472b6;
+        --accent-soft: rgba(129, 140, 248, 0.14);
+        --border:   rgba(148, 163, 184, 0.20);
+        --overdue-bg: rgba(239, 68, 68, 0.14);
+        --label-bg:     rgba(129, 140, 248, 0.15);
+        --label-border: rgba(129, 140, 248, 0.45);
+        --label-public-bg:     rgba(52, 211, 153, 0.12);
+        --label-public-border: rgba(52, 211, 153, 0.5);
+        --shared-bg: rgba(244, 114, 182, 0.06);
+        --shared-border: rgba(244, 114, 182, 0.25);
       }
     }
+
     * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
     body {
-      margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: var(--bg);
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background:
+        radial-gradient(circle at 10% -10%, var(--accent-soft), transparent 55%),
+        radial-gradient(circle at 90% 110%, rgba(236, 72, 153, 0.08), transparent 55%),
+        linear-gradient(180deg, var(--bg-start), var(--bg-end));
+      background-attachment: fixed;
       color: var(--text);
       min-height: 100vh;
       display: flex;
       align-items: flex-start;
       justify-content: center;
       padding: 3rem 1rem;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
     }
     .app { width: 100%; max-width: 44rem; }
-    h1 { margin: 0 0 0.5rem; font-size: 1.75rem; }
+
     .app-header {
       display: flex;
       align-items: baseline;
       justify-content: space-between;
       gap: 1rem;
+      margin-bottom: 0.4rem;
       flex-wrap: wrap;
     }
+    h1 {
+      margin: 0;
+      font-size: 1.9rem;
+      letter-spacing: -0.01em;
+      font-weight: 700;
+      background: linear-gradient(90deg, var(--accent), var(--accent-2));
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
     .user-box { display: flex; align-items: center; gap: 0.5rem; }
-    .user-name { color: var(--muted); font-size: 0.9rem; }
-    .user-name::before { content: "@"; }
+    .avatar {
+      width: 1.85rem;
+      height: 1.85rem;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: white;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.8rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .user-name { color: var(--muted); font-size: 0.9rem; font-weight: 500; }
+    .user-name::before { content: "@"; color: var(--muted); margin-right: 0.05rem; }
     .logout {
-      padding: 0.3rem 0.7rem;
-      font-size: 0.85rem;
+      padding: 0.35rem 0.75rem;
+      font-size: 0.82rem;
       background: transparent;
       color: var(--muted);
       border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      cursor: pointer;
+      transition: all 150ms ease;
     }
-    .logout:hover { color: var(--text); }
-    .hint { color: var(--muted); font-size: 0.85rem; margin: 0 0 1.25rem; }
+    .logout:hover { color: var(--text); border-color: var(--muted); background: var(--accent-soft); }
+
+    .hint { color: var(--muted); font-size: 0.82rem; margin: 0 0 1.25rem; }
     kbd {
       background: var(--card);
       border: 1px solid var(--border);
-      border-radius: 0.25rem;
-      padding: 0 0.35rem;
+      border-radius: 0.3rem;
+      padding: 0.05rem 0.4rem;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.8rem;
+      font-size: 0.78rem;
+      box-shadow: var(--shadow-sm);
     }
+
     .card {
       background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 0.75rem;
-      padding: 1rem 1.25rem;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid var(--card-border);
+      border-radius: 1.25rem;
+      padding: 1.25rem 1.4rem;
+      box-shadow: var(--shadow-md);
     }
-    form { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
-    form > input[type="text"] { flex: 1 1 14rem; }
-    form > input[type="date"] { flex: 0 0 10rem; }
+
+    form#add-form { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    form#add-form > input[type="text"] { flex: 1 1 14rem; }
+    form#add-form > input[type="date"] { flex: 0 0 10rem; }
+
     .toolbar {
       display: flex;
       gap: 0.75rem;
-      margin-bottom: 0.5rem;
+      margin-bottom: 0.75rem;
       font-size: 0.9rem;
       flex-wrap: wrap;
       align-items: center;
     }
-    .toolbar .group { display: flex; gap: 0.25rem; align-items: center; }
+    .toolbar .group { display: flex; gap: 0.25rem; align-items: center; padding: 0.15rem; border-radius: 0.6rem; background: rgba(15, 23, 42, 0.03); }
     .toolbar .group[hidden] { display: none; }
-    .toolbar .group-label { color: var(--muted); font-size: 0.8rem; margin-right: 0.25rem; }
+    .toolbar .group-label { color: var(--muted); font-size: 0.78rem; padding: 0 0.3rem 0 0.5rem; font-weight: 500; }
     .toolbar button {
       background: transparent;
       color: var(--muted);
       padding: 0.3rem 0.7rem;
       border: 1px solid transparent;
+      border-radius: 0.45rem;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: all 150ms ease;
     }
+    .toolbar button:hover { color: var(--text); background: rgba(15, 23, 42, 0.04); }
     .toolbar button.active {
       color: var(--text);
-      background: var(--bg);
+      background: var(--card);
       border-color: var(--border);
+      box-shadow: var(--shadow-sm);
     }
     .label-filter {
-      color: var(--accent);
-      font-weight: 500;
+      background: var(--accent-soft) !important;
     }
+    .label-filter #label-filter-name { color: var(--accent); font-weight: 600; padding: 0 0.3rem; font-size: 0.85rem; }
     .label-filter button {
-      padding: 0 0.4rem;
-      font-size: 0.75rem;
+      padding: 0.2rem 0.45rem;
+      font-size: 0.85rem;
       color: var(--muted);
-      background: transparent;
     }
+
     input[type="text"],
     input[type="date"] {
-      padding: 0.6rem 0.75rem;
+      padding: 0.6rem 0.8rem;
       border: 1px solid var(--border);
-      border-radius: 0.5rem;
+      border-radius: 0.6rem;
       background: var(--card);
       color: var(--text);
-      font-size: 1rem;
+      font-size: 0.95rem;
+      font-family: inherit;
+      transition: border-color 120ms ease, box-shadow 120ms ease;
     }
     input[type="text"]:focus,
     input[type="date"]:focus {
-      outline: 2px solid var(--accent);
-      outline-offset: 1px;
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
     }
-    button {
-      padding: 0.6rem 1rem;
+    button.primary {
+      padding: 0.6rem 1.1rem;
       border: 0;
-      border-radius: 0.5rem;
-      background: var(--accent);
+      border-radius: 0.6rem;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
       color: white;
-      font-size: 1rem;
+      font-size: 0.95rem;
+      font-weight: 600;
       cursor: pointer;
+      box-shadow: var(--shadow-sm);
+      transition: transform 100ms ease, box-shadow 120ms ease, filter 120ms ease;
     }
-    button:hover { filter: brightness(1.08); }
-    ul { list-style: none; padding: 0; margin: 0; }
+    button.primary:hover { filter: brightness(1.05); box-shadow: var(--shadow-md); transform: translateY(-1px); }
+    button.primary:active { transform: translateY(0); }
+
+    ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.4rem; }
     li {
       display: flex;
       align-items: center;
-      gap: 0.5rem;
-      padding: 0.6rem 0.4rem;
-      border-bottom: 1px solid var(--border);
+      gap: 0.55rem;
+      padding: 0.6rem 0.85rem;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 0.8rem;
+      transition: box-shadow 120ms ease, transform 80ms ease, background 150ms ease;
       flex-wrap: wrap;
     }
+    li:hover { box-shadow: var(--shadow-sm); }
     li.draggable { cursor: grab; }
-    li:last-child { border-bottom: 0; }
+    li.draggable:active { cursor: grabbing; }
     li.dragging { opacity: 0.35; }
-    li.drop-target { background: var(--drop); border-radius: 0.5rem; }
-    li.overdue { background: var(--overdue-bg); border-radius: 0.5rem; }
-    li input[type="checkbox"] { width: 1.1rem; height: 1.1rem; cursor: pointer; }
-    li .title { flex: 1 1 auto; min-width: 0; padding: 0.25rem 0; cursor: text; }
-    li.done .title { text-decoration: line-through; color: var(--muted); }
+    li.drop-target { background: var(--drop); border-color: var(--accent); }
+    li.overdue { background: var(--overdue-bg); border-color: var(--overdue-border); }
+    li.shared { background: var(--shared-bg); border-color: var(--shared-border); border-style: dashed; }
+
+    li input[type="checkbox"] {
+      width: 1.1rem;
+      height: 1.1rem;
+      cursor: pointer;
+      accent-color: var(--accent);
+    }
+    li input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.5; }
+
+    li .title { flex: 1 1 auto; min-width: 0; padding: 0.2rem 0; cursor: text; font-weight: 500; }
+    li.done .title { text-decoration: line-through; color: var(--muted); font-weight: 400; }
+    li.shared .title { cursor: default; }
     li .edit {
       flex: 1;
-      padding: 0.25rem 0.5rem;
+      padding: 0.3rem 0.5rem;
       border: 1px solid var(--accent);
-      border-radius: 0.3rem;
+      border-radius: 0.4rem;
       background: var(--card);
       color: var(--text);
-      font-size: 1rem;
+      font-size: 0.95rem;
     }
+
+    .owner-pill {
+      font-size: 0.7rem;
+      padding: 0.12rem 0.45rem 0.12rem 0.22rem;
+      border-radius: 999px;
+      background: rgba(236, 72, 153, 0.12);
+      color: var(--accent-2);
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      white-space: nowrap;
+    }
+    .owner-pill .avatar { width: 1.1rem; height: 1.1rem; font-size: 0.6rem; }
+
     .labels {
       display: inline-flex;
-      gap: 0.25rem;
+      gap: 0.3rem;
       flex-wrap: wrap;
       align-items: center;
     }
     .label {
-      font-size: 0.75rem;
-      padding: 0.1rem 0.5rem;
+      font-size: 0.72rem;
+      padding: 0.15rem 0.55rem;
       border-radius: 999px;
       background: var(--label-bg);
       border: 1px solid var(--label-border);
-      color: var(--text);
+      color: var(--accent);
       cursor: pointer;
       white-space: nowrap;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      transition: filter 120ms ease;
     }
-    .label:hover { filter: brightness(1.1); }
+    .label.public {
+      background: var(--label-public-bg);
+      border-color: var(--label-public-border);
+      color: var(--success);
+    }
+    .label:hover { filter: brightness(1.05); }
     .label-add {
-      font-size: 0.75rem;
-      padding: 0.1rem 0.5rem;
+      font-size: 0.72rem;
+      padding: 0.1rem 0.55rem;
       border-radius: 999px;
       background: transparent;
       border: 1px dashed var(--border);
       color: var(--muted);
       cursor: pointer;
+      transition: all 120ms ease;
     }
+    .label-add:hover { color: var(--accent); border-color: var(--accent); }
     .label-input {
       font-size: 0.75rem;
-      padding: 0.1rem 0.5rem;
+      padding: 0.15rem 0.55rem;
       border-radius: 999px;
       border: 1px solid var(--accent);
       background: var(--card);
       color: var(--text);
       width: 8rem;
     }
+
     .due {
-      font-size: 0.8rem;
-      padding: 0.15rem 0.5rem;
+      font-size: 0.78rem;
+      padding: 0.18rem 0.55rem;
       border: 1px solid var(--border);
       border-radius: 999px;
       color: var(--muted);
       cursor: pointer;
       white-space: nowrap;
+      transition: color 120ms ease, border-color 120ms ease;
     }
-    .due.overdue { color: var(--danger); border-color: var(--danger); font-weight: 600; }
-    .due.empty { color: var(--muted); font-style: italic; opacity: 0.7; }
+    .due:hover { color: var(--text); border-color: var(--muted); }
+    .due.overdue { color: var(--danger); border-color: var(--overdue-border); font-weight: 600; background: rgba(239, 68, 68, 0.06); }
+    .due.empty { color: var(--muted); font-style: italic; opacity: 0.65; border-style: dashed; }
     .due.empty:hover { opacity: 1; }
-    .due-edit { font-size: 0.8rem; padding: 0.15rem 0.35rem; }
-    .delete {
+    .due-edit { font-size: 0.78rem; padding: 0.18rem 0.4rem; }
+
+    .icon-btn {
       background: transparent;
-      color: var(--danger);
-      padding: 0.25rem 0.5rem;
-      font-size: 1.1rem;
+      border: 0;
+      color: var(--muted);
+      padding: 0.3rem;
+      border-radius: 0.4rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 120ms ease, background 120ms ease;
     }
-    .empty { color: var(--muted); text-align: center; padding: 1rem 0; }
+    .icon-btn:hover { color: var(--danger); background: rgba(239, 68, 68, 0.08); }
+    .icon-btn svg { width: 1rem; height: 1rem; }
+
+    .empty {
+      color: var(--muted);
+      text-align: center;
+      padding: 1.5rem 0;
+      font-size: 0.9rem;
+    }
+
+    @keyframes fade-in {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    li { animation: fade-in 180ms ease; }
+
+    /* Manage public labels button */
+    .manage-public {
+      margin-left: auto;
+      font-size: 0.82rem;
+      color: var(--muted);
+      background: transparent;
+      border: 1px solid var(--border);
+      padding: 0.3rem 0.7rem;
+      border-radius: 0.5rem;
+      cursor: pointer;
+      transition: all 120ms ease;
+    }
+    .manage-public:hover { color: var(--accent); border-color: var(--accent); }
+
+    .dialog-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      z-index: 10;
+      backdrop-filter: blur(3px);
+    }
+    .dialog-backdrop[hidden] { display: none; }
+    .dialog {
+      background: var(--card);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--card-border);
+      border-radius: 1rem;
+      box-shadow: var(--shadow-lg);
+      padding: 1.4rem;
+      max-width: 24rem;
+      width: 100%;
+    }
+    .dialog h2 { margin: 0 0 0.75rem; font-size: 1.05rem; }
+    .dialog .labels-list { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.9rem; }
+    .dialog .labels-list .row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      font-size: 0.9rem;
+      padding: 0.4rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 0.55rem;
+    }
+    .dialog .labels-list .row label { flex: 1; cursor: pointer; }
+    .dialog .labels-list .row input[type="checkbox"] { accent-color: var(--success); }
+    .dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
+    .dialog button.secondary {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.9rem;
+      border-radius: 0.55rem;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    .dialog button.secondary:hover { color: var(--text); }
   </style>
 </head>
 <body>
@@ -227,41 +430,58 @@
     <div class="app-header">
       <h1>todo-go</h1>
       <div class="user-box">
+        <span id="user-avatar" class="avatar"></span>
         <span id="user-name" class="user-name"></span>
         <button id="logout" class="logout" type="button">Sign out</button>
       </div>
     </div>
     <p class="hint">
-      <kbd>/</kbd> focus · <kbd>Enter</kbd> save · <kbd>Esc</kbd> cancel · click title/date/label to edit · right-click label to remove · drag to reorder (manual sort)
+      <kbd>/</kbd> focus · <kbd>Enter</kbd> save · <kbd>Esc</kbd> cancel · click to edit · <kbd>Shift</kbd>+click a label to publish · right-click label to remove · drag to reorder (manual sort, own tasks only)
     </p>
     <div class="card">
       <form id="add-form">
         <input id="title" type="text" placeholder="What needs doing?" autocomplete="off" required />
         <input id="due" type="date" title="Optional due date" />
-        <button type="submit">Add</button>
+        <button type="submit" class="primary">Add</button>
       </form>
 
       <div class="toolbar">
         <div class="group">
-          <span class="group-label">Show:</span>
+          <span class="group-label">Show</span>
           <button data-filter="all" class="active">All</button>
           <button data-filter="pending">Pending</button>
           <button data-filter="done">Done</button>
         </div>
         <div class="group">
-          <span class="group-label">Sort:</span>
+          <span class="group-label">Sort</span>
           <button data-sort="due" class="active">Due date</button>
           <button data-sort="manual">Manual</button>
         </div>
         <div class="group label-filter" id="label-filter" hidden>
-          <span class="group-label">Label:</span>
+          <span class="group-label">Label</span>
           <span id="label-filter-name"></span>
           <button id="label-filter-clear" type="button" title="Clear label filter">×</button>
         </div>
+        <button id="manage-public" type="button" class="manage-public" title="Manage which of your labels are public">Public labels…</button>
       </div>
 
       <ul id="list"></ul>
-      <div id="empty" class="empty" hidden>(no tasks)</div>
+      <div id="empty" class="empty" hidden>No tasks yet. Add one above.</div>
+    </div>
+  </div>
+
+  <!-- Public labels dialog -->
+  <div id="public-dialog" class="dialog-backdrop" hidden>
+    <div class="dialog">
+      <h2>Public labels</h2>
+      <p class="hint" style="margin: 0 0 0.75rem;">
+        Tasks tagged with a public label are visible (read-only) to other users.
+      </p>
+      <div id="public-labels-list" class="labels-list"></div>
+      <div id="public-labels-empty" class="empty" hidden>You have no labels yet.</div>
+      <div class="dialog-actions">
+        <button type="button" class="secondary" id="public-dialog-close">Done</button>
+      </div>
     </div>
   </div>
 
@@ -275,24 +495,47 @@
     const labelFilterEl = document.getElementById("label-filter");
     const labelFilterNameEl = document.getElementById("label-filter-name");
     const labelFilterClearEl = document.getElementById("label-filter-clear");
+    const userNameEl = document.getElementById("user-name");
+    const userAvatarEl = document.getElementById("user-avatar");
+    const managePublicBtn = document.getElementById("manage-public");
+    const publicDialog = document.getElementById("public-dialog");
+    const publicLabelsList = document.getElementById("public-labels-list");
+    const publicLabelsEmpty = document.getElementById("public-labels-empty");
 
+    let currentUser = "";
     let currentFilter = "all";
     let currentSort = "due";
     let currentLabel = "";
     let currentTasks = [];
+    let publicSet = new Set();
     let dragSrcID = null;
 
     const todayISO = () => new Date().toISOString().slice(0, 10);
 
+    function avatarText(name) { return (name || "?").trim().charAt(0); }
+
+    function iconTrash() {
+      return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>`;
+    }
+    function iconGlobe() {
+      return `<svg style="width:0.75rem;height:0.75rem" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 0 20 15.3 15.3 0 0 1 0-20z"/></svg>`;
+    }
+
     async function bootstrapUser() {
       const res = await fetch("/api/me");
-      if (res.status === 401) {
-        window.location.href = "/login";
-        return null;
-      }
+      if (res.status === 401) { window.location.href = "/login"; return null; }
       const data = await res.json();
-      document.getElementById("user-name").textContent = data.username || "";
-      return data.username;
+      currentUser = data.username || "";
+      userNameEl.textContent = currentUser;
+      userAvatarEl.textContent = avatarText(currentUser);
+      return currentUser;
+    }
+
+    async function loadPublicSet() {
+      const res = await fetch("/api/public-labels");
+      if (!res.ok) { publicSet = new Set(); return; }
+      const labels = await res.json();
+      publicSet = new Set(labels || []);
     }
 
     document.getElementById("logout").addEventListener("click", async () => {
@@ -328,15 +571,15 @@
     }
 
     function renderItem(t) {
+      const mine = t.owner === currentUser;
       const li = document.createElement("li");
       li.dataset.id = t.id;
+      li.dataset.owner = t.owner;
       if (t.done) li.classList.add("done");
+      if (!mine) li.classList.add("shared");
 
-      const draggable = currentFilter === "all" && currentSort === "manual" && !currentLabel;
-      if (draggable) {
-        li.classList.add("draggable");
-        li.draggable = true;
-      }
+      const draggable = mine && currentFilter === "all" && currentSort === "manual" && !currentLabel;
+      if (draggable) { li.classList.add("draggable"); li.draggable = true; }
 
       const overdue = !t.done && t.due_date && t.due_date < todayISO();
       if (overdue) li.classList.add("overdue");
@@ -344,58 +587,87 @@
       const cb = document.createElement("input");
       cb.type = "checkbox";
       cb.checked = t.done;
-      cb.addEventListener("change", () => toggleDone(t.id, cb.checked));
+      cb.disabled = !mine;
+      if (mine) cb.addEventListener("change", () => toggleDone(t.id, cb.checked));
 
       const title = document.createElement("span");
       title.className = "title";
       title.textContent = t.title;
-      title.addEventListener("click", () => startTitleEdit(li, t));
+      if (mine) title.addEventListener("click", () => startTitleEdit(li, t));
 
       const labels = document.createElement("span");
       labels.className = "labels";
       (t.labels || []).forEach((l) => {
+        const isPublic = mine ? publicSet.has(l) : true; // shared tasks' labels are public by definition
         const pill = document.createElement("span");
-        pill.className = "label";
-        pill.textContent = "#" + l;
-        pill.title = "Click to filter · right-click to remove";
-        pill.addEventListener("click", () => {
+        pill.className = "label" + (isPublic ? " public" : "");
+        if (isPublic) { pill.innerHTML = iconGlobe(); }
+        pill.appendChild(document.createTextNode("#" + l));
+        pill.title = mine
+          ? "Click to filter · Shift+click to toggle public · Right-click to remove"
+          : "Shared public label";
+        pill.addEventListener("click", (e) => {
+          if (e.shiftKey && mine) { togglePublic(l); return; }
           currentLabel = l;
           updateLabelFilterUI();
           refresh();
         });
-        pill.addEventListener("contextmenu", (e) => {
-          e.preventDefault();
-          removeLabel(t.id, l);
-        });
+        if (mine) {
+          pill.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            removeLabel(t.id, l);
+          });
+        }
         labels.appendChild(pill);
       });
-
-      const addLabelBtn = document.createElement("button");
-      addLabelBtn.type = "button";
-      addLabelBtn.className = "label-add";
-      addLabelBtn.textContent = "+ label";
-      addLabelBtn.addEventListener("click", () => startAddLabel(addLabelBtn, t));
-      labels.appendChild(addLabelBtn);
+      if (mine) {
+        const addLabelBtn = document.createElement("button");
+        addLabelBtn.type = "button";
+        addLabelBtn.className = "label-add";
+        addLabelBtn.textContent = "+ label";
+        addLabelBtn.addEventListener("click", () => startAddLabel(addLabelBtn, t));
+        labels.appendChild(addLabelBtn);
+      }
 
       const due = document.createElement("span");
       due.className = "due" + (overdue ? " overdue" : "") + (t.due_date ? "" : " empty");
       due.textContent = t.due_date ? (overdue ? `⚠ ${t.due_date}` : t.due_date) : "+ due";
-      due.title = t.due_date ? "Click to change, right-click to clear" : "Click to set a due date";
-      due.addEventListener("click", () => startDueEdit(li, t));
-      due.addEventListener("contextmenu", (e) => {
-        if (!t.due_date) return;
-        e.preventDefault();
-        setDue(t.id, "");
-      });
+      if (mine) {
+        due.addEventListener("click", () => startDueEdit(li, t));
+        due.addEventListener("contextmenu", (e) => {
+          if (!t.due_date) return;
+          e.preventDefault();
+          setDue(t.id, "");
+        });
+      } else {
+        due.style.cursor = "default";
+      }
 
-      const del = document.createElement("button");
-      del.className = "delete";
-      del.type = "button";
-      del.textContent = "×";
-      del.title = "Delete";
-      del.addEventListener("click", () => remove(t.id));
+      const right = document.createElement("span");
+      right.style.marginLeft = "auto";
+      right.style.display = "flex";
+      right.style.alignItems = "center";
+      right.style.gap = "0.4rem";
 
-      li.append(cb, title, labels, due, del);
+      if (!mine) {
+        const owner = document.createElement("span");
+        owner.className = "owner-pill";
+        const av = document.createElement("span");
+        av.className = "avatar";
+        av.textContent = avatarText(t.owner);
+        owner.append(av, document.createTextNode("@" + t.owner));
+        right.appendChild(owner);
+      } else {
+        const del = document.createElement("button");
+        del.className = "icon-btn";
+        del.type = "button";
+        del.title = "Delete";
+        del.innerHTML = iconTrash();
+        del.addEventListener("click", () => remove(t.id));
+        right.appendChild(del);
+      }
+
+      li.append(cb, title, labels, due, right);
 
       if (draggable) {
         li.addEventListener("dragstart", (e) => {
@@ -433,7 +705,6 @@
       input.maxLength = 32;
       btn.replaceWith(input);
       input.focus();
-
       let settled = false;
       const commit = async (save) => {
         if (settled) return;
@@ -451,7 +722,6 @@
         }
         refresh();
       };
-
       input.addEventListener("keydown", (e) => {
         if (e.key === "Enter") { e.preventDefault(); commit(true); }
         else if (e.key === "Escape") { e.preventDefault(); commit(false); }
@@ -459,8 +729,21 @@
       input.addEventListener("blur", () => commit(true));
     }
 
+    async function togglePublic(label) {
+      const next = new Set(publicSet);
+      if (next.has(label)) next.delete(label);
+      else next.add(label);
+      await fetch("/api/public-labels", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ labels: Array.from(next) }),
+      });
+      publicSet = next;
+      refresh();
+    }
+
     async function removeLabel(id, label) {
-      const task = currentTasks.find((t) => t.id === id);
+      const task = currentTasks.find((t) => t.id === id && t.owner === currentUser);
       if (!task) return;
       const next = (task.labels || []).filter((l) => l !== label);
       await fetch(`/api/tasks/${id}`, {
@@ -477,12 +760,10 @@
       input.type = "text";
       input.className = "edit";
       input.value = t.title;
-
       const titleEl = li.querySelector(".title");
       titleEl.replaceWith(input);
       input.focus();
       input.select();
-
       let settled = false;
       const commit = async (save) => {
         if (settled) return;
@@ -499,7 +780,6 @@
         }
         refresh();
       };
-
       input.addEventListener("keydown", (e) => {
         if (e.key === "Enter") { e.preventDefault(); commit(true); }
         else if (e.key === "Escape") { e.preventDefault(); commit(false); }
@@ -513,26 +793,20 @@
       input.type = "date";
       input.className = "due due-edit";
       input.value = t.due_date || "";
-
       const dueEl = li.querySelector(".due");
       dueEl.replaceWith(input);
       input.focus();
       if (typeof input.showPicker === "function") input.showPicker();
-
       let settled = false;
       const commit = async (save) => {
         if (settled) return;
         settled = true;
         if (save) {
           const next = input.value || "";
-          if (next !== (t.due_date || "")) {
-            await setDue(t.id, next);
-            return;
-          }
+          if (next !== (t.due_date || "")) { await setDue(t.id, next); return; }
         }
         refresh();
       };
-
       input.addEventListener("change", () => commit(true));
       input.addEventListener("keydown", (e) => {
         if (e.key === "Escape") { e.preventDefault(); commit(false); }
@@ -565,16 +839,16 @@
     }
 
     async function moveTask(srcID, targetID) {
-      const ids = currentTasks.map((t) => t.id);
-      const from = ids.indexOf(srcID);
-      const to = ids.indexOf(targetID);
+      const myIDs = currentTasks.filter((t) => t.owner === currentUser).map((t) => t.id);
+      const from = myIDs.indexOf(srcID);
+      const to = myIDs.indexOf(targetID);
       if (from < 0 || to < 0) return;
-      ids.splice(from, 1);
-      ids.splice(to, 0, srcID);
+      myIDs.splice(from, 1);
+      myIDs.splice(to, 0, srcID);
       await fetch("/api/reorder", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids }),
+        body: JSON.stringify({ ids: myIDs }),
       });
       refresh();
     }
@@ -615,16 +889,52 @@
     document.addEventListener("keydown", (e) => {
       const tag = document.activeElement?.tagName;
       const typing = tag === "INPUT" || tag === "TEXTAREA";
-      if (e.key === "/" && !typing) {
-        e.preventDefault();
-        titleInput.focus();
-      }
-      if (e.key === "Escape" && document.activeElement === titleInput) {
-        titleInput.blur();
-      }
+      if (e.key === "/" && !typing) { e.preventDefault(); titleInput.focus(); }
+      if (e.key === "Escape" && document.activeElement === titleInput) titleInput.blur();
     });
 
-    bootstrapUser().then((user) => { if (user) refresh(); });
+    // Public labels management dialog
+    managePublicBtn.addEventListener("click", async () => {
+      await loadPublicSet();
+      // collect this user's own labels
+      const myLabels = new Set();
+      for (const t of currentTasks) {
+        if (t.owner !== currentUser) continue;
+        (t.labels || []).forEach((l) => myLabels.add(l));
+      }
+      publicLabelsList.innerHTML = "";
+      const labelsArray = Array.from(myLabels).sort();
+      publicLabelsEmpty.hidden = labelsArray.length > 0;
+      labelsArray.forEach((l) => {
+        const row = document.createElement("div");
+        row.className = "row";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.id = "pub-" + l;
+        cb.checked = publicSet.has(l);
+        cb.addEventListener("change", () => togglePublic(l));
+        const label = document.createElement("label");
+        label.setAttribute("for", cb.id);
+        label.textContent = "#" + l;
+        row.append(cb, label);
+        publicLabelsList.appendChild(row);
+      });
+      publicDialog.hidden = false;
+    });
+
+    document.getElementById("public-dialog-close").addEventListener("click", () => {
+      publicDialog.hidden = true;
+    });
+    publicDialog.addEventListener("click", (e) => {
+      if (e.target === publicDialog) publicDialog.hidden = true;
+    });
+
+    (async () => {
+      const user = await bootstrapUser();
+      if (!user) return;
+      await loadPublicSet();
+      refresh();
+    })();
   </script>
 </body>
 </html>

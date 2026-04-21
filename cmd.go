@@ -38,6 +38,9 @@ func newRootCmd() *cobra.Command {
 		newTagCmd(openStore),
 		newUntagCmd(openStore),
 		newLabelsCmd(openStore),
+		newPublicCmd(openStore),
+		newPrivateCmd(openStore),
+		newPublicLabelsCmd(openStore),
 		newRemoveCmd(openStore),
 		newServeCmd(),
 	)
@@ -310,6 +313,73 @@ func newLabelsCmd(open storeOpener) *cobra.Command {
 			labels := store.Labels()
 			if len(labels) == 0 {
 				fmt.Println("(no labels)")
+				return nil
+			}
+			for _, l := range labels {
+				fmt.Println(l)
+			}
+			return nil
+		},
+	}
+}
+
+func newPublicCmd(open storeOpener) *cobra.Command {
+	return &cobra.Command{
+		Use:   "public <label>",
+		Short: "Mark a label as public (tasks with this label become visible to other users)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := open()
+			if err != nil {
+				return err
+			}
+			labels, err := store.AddPublicLabel(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Printf("public labels: %s\n", strings.Join(labels, ", "))
+			return nil
+		},
+	}
+}
+
+func newPrivateCmd(open storeOpener) *cobra.Command {
+	return &cobra.Command{
+		Use:   "private <label>",
+		Short: "Make a label private again",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := open()
+			if err != nil {
+				return err
+			}
+			labels, err := store.RemovePublicLabel(args[0])
+			if err != nil {
+				return err
+			}
+			if len(labels) == 0 {
+				fmt.Println("no public labels")
+			} else {
+				fmt.Printf("public labels: %s\n", strings.Join(labels, ", "))
+			}
+			return nil
+		},
+	}
+}
+
+func newPublicLabelsCmd(open storeOpener) *cobra.Command {
+	return &cobra.Command{
+		Use:   "public-labels",
+		Short: "List this user's public labels",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := open()
+			if err != nil {
+				return err
+			}
+			labels := store.GetPublicLabels()
+			if len(labels) == 0 {
+				fmt.Println("(none)")
 				return nil
 			}
 			for _, l := range labels {

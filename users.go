@@ -109,6 +109,17 @@ func (us *UserStore) Count() int {
 	return len(us.Users)
 }
 
+// Usernames returns all registered usernames (snapshot).
+func (us *UserStore) Usernames() []string {
+	us.mu.Lock()
+	defer us.mu.Unlock()
+	out := make([]string, len(us.Users))
+	for i, u := range us.Users {
+		out[i] = u.Username
+	}
+	return out
+}
+
 // Register creates a new user. Returns the normalized username.
 func (us *UserStore) Register(rawUsername, password string) (string, error) {
 	username := NormalizeUsername(rawUsername)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -20,6 +21,13 @@ type serverDeps struct {
 	Sessions *SessionManager
 }
 
+// TaskView adds owner context when rendering a task from the API.
+type TaskView struct {
+	Task
+	Owner  string `json:"owner"`
+	Public bool   `json:"public"` // true if any of its labels is in owner's public set
+}
+
 func runServer(deps serverDeps, addr string) error {
 	mux := http.NewServeMux()
 
@@ -30,12 +38,13 @@ func runServer(deps serverDeps, addr string) error {
 	mux.HandleFunc("/api/me", deps.Sessions.requireAuth(apiMeHandler()))
 
 	// Task API (protected)
-	mux.HandleFunc("/api/tasks", deps.Sessions.requireAuth(apiTasksHandler(deps.Stores)))
+	mux.HandleFunc("/api/tasks", deps.Sessions.requireAuth(apiTasksHandler(deps)))
 	mux.HandleFunc("/api/tasks/", deps.Sessions.requireAuth(apiTaskByIDHandler(deps.Stores)))
 	mux.HandleFunc("/api/reorder", deps.Sessions.requireAuth(apiReorderHandler(deps.Stores)))
-	mux.HandleFunc("/api/labels", deps.Sessions.requireAuth(apiLabelsHandler(deps.Stores)))
+	mux.HandleFunc("/api/labels", deps.Sessions.requireAuth(apiLabelsHandler(deps)))
+	mux.HandleFunc("/api/public-labels", deps.Sessions.requireAuth(apiPublicLabelsHandler(deps.Stores)))
 
-	// Static web (gates index.html behind auth; login/register are public)
+	// Static web
 	webRoot, err := fs.Sub(webFS, "web")
 	if err != nil {
 		return err
@@ -43,13 +52,11 @@ func runServer(deps serverDeps, addr string) error {
 	staticFS := http.FileServer(http.FS(webRoot))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Public pages
 		switch r.URL.Path {
 		case "/login", "/register":
 			serveStaticPage(w, r, webRoot, r.URL.Path+".html")
 			return
 		}
-		// Any other path: require auth
 		if deps.Sessions.userFromRequest(r) == "" {
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
@@ -88,7 +95,6 @@ func apiRegisterHandler(deps serverDeps) http.HandlerFunc {
 			http.Error(w, "invalid json", http.StatusBadRequest)
 			return
 		}
-
 		firstUser := deps.Users.Count() == 0
 		username, err := deps.Users.Register(body.Username, body.Password)
 		if err != nil {
@@ -102,14 +108,11 @@ func apiRegisterHandler(deps serverDeps) http.HandlerFunc {
 			}
 			return
 		}
-
-		// On first-ever user, adopt any legacy tasks.json.
 		if firstUser {
 			if _, migErr := migrateLegacyTasks(username); migErr != nil {
-				fmt.Printf("warning: legacy task migration failed for %s: %v\n", username, migErr)
+				fmt.Printf("warning: legacy migration failed for %s: %v\n", username, migErr)
 			}
 		}
-
 		token := deps.Sessions.Issue(username)
 		setSessionCookie(w, token)
 		writeJSON(w, http.StatusCreated, map[string]string{"username": username})
@@ -161,9 +164,10 @@ func apiMeHandler() http.HandlerFunc {
 	}
 }
 
-// --- Task routes (per-user) ------------------------------------------------
+// --- Task routes -----------------------------------------------------------
 
-func userStore(w http.ResponseWriter, r *http.Request, mgr *StoreManager) *Store {
+// userStoreOrNil resolves the current user's Store or writes a 500.
+func userStoreOrNil(w http.ResponseWriter, r *http.Request, mgr *StoreManager) *Store {
 	user := usernameFromRequest(r)
 	s, err := mgr.ForUser(user)
 	if err != nil {
@@ -173,27 +177,127 @@ func userStore(w http.ResponseWriter, r *http.Request, mgr *StoreManager) *Store
 	return s
 }
 
-func apiTasksHandler(mgr *StoreManager) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		store := userStore(w, r, mgr)
-		if store == nil {
-			return
+// aggregatedTasks returns the current user's tasks plus shared tasks from
+// other users (those tagged with any of that user's public labels).
+func aggregatedTasks(deps serverDeps, currentUser string) ([]TaskView, error) {
+	out := []TaskView{}
+
+	me, err := deps.Stores.ForUser(currentUser)
+	if err != nil {
+		return nil, err
+	}
+	myPublic := make(map[string]bool)
+	for _, l := range me.GetPublicLabels() {
+		myPublic[l] = true
+	}
+	for _, t := range me.List() {
+		isPublic := false
+		for _, l := range t.Labels {
+			if myPublic[l] {
+				isPublic = true
+				break
+			}
 		}
+		out = append(out, TaskView{Task: t, Owner: currentUser, Public: isPublic})
+	}
+
+	for _, other := range deps.Users.Usernames() {
+		if other == currentUser {
+			continue
+		}
+		s, err := deps.Stores.ForUser(other)
+		if err != nil {
+			continue
+		}
+		otherPublic := make(map[string]bool)
+		for _, l := range s.GetPublicLabels() {
+			otherPublic[l] = true
+		}
+		if len(otherPublic) == 0 {
+			continue
+		}
+		for _, t := range s.List() {
+			shared := false
+			for _, l := range t.Labels {
+				if otherPublic[l] {
+					shared = true
+					break
+				}
+			}
+			if shared {
+				out = append(out, TaskView{Task: t, Owner: other, Public: true})
+			}
+		}
+	}
+	return out, nil
+}
+
+func filterViewsByDone(views []TaskView, done bool) []TaskView {
+	out := views[:0:0]
+	for _, v := range views {
+		if v.Done == done {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func filterViewsByLabel(views []TaskView, label string) []TaskView {
+	out := views[:0:0]
+	for _, v := range views {
+		if HasLabel(v.Task, label) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func sortViews(views []TaskView, mode SortMode) {
+	if mode != SortByDue {
+		return
+	}
+	sort.SliceStable(views, func(i, j int) bool {
+		a, b := views[i], views[j]
+		if a.Done != b.Done {
+			return !a.Done
+		}
+		aHas, bHas := a.DueDate != "", b.DueDate != ""
+		if aHas != bHas {
+			return aHas
+		}
+		if aHas && a.DueDate != b.DueDate {
+			return a.DueDate < b.DueDate
+		}
+		if a.Owner != b.Owner {
+			return a.Owner < b.Owner
+		}
+		return a.ID < b.ID
+	})
+}
+
+func apiTasksHandler(deps serverDeps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		current := usernameFromRequest(r)
+
 		switch r.Method {
 		case http.MethodGet:
-			tasks := store.List()
+			views, err := aggregatedTasks(deps, current)
+			if err != nil {
+				http.Error(w, "failed to aggregate tasks", http.StatusInternalServerError)
+				return
+			}
 			switch r.URL.Query().Get("status") {
 			case "pending":
-				tasks = filterByDone(tasks, false)
+				views = filterViewsByDone(views, false)
 			case "done":
-				tasks = filterByDone(tasks, true)
+				views = filterViewsByDone(views, true)
 			case "", "all":
 			default:
 				http.Error(w, "invalid status; want one of: pending, done, all", http.StatusBadRequest)
 				return
 			}
 			if label := r.URL.Query().Get("label"); label != "" {
-				tasks = filterByLabel(tasks, label)
+				views = filterViewsByLabel(views, label)
 			}
 			sortParam := r.URL.Query().Get("sort")
 			if sortParam == "" {
@@ -204,10 +308,15 @@ func apiTasksHandler(mgr *StoreManager) http.HandlerFunc {
 				http.Error(w, "invalid sort; want one of: due, manual", http.StatusBadRequest)
 				return
 			}
-			SortTasks(tasks, mode)
-			writeJSON(w, http.StatusOK, tasks)
+			sortViews(views, mode)
+			writeJSON(w, http.StatusOK, views)
 
 		case http.MethodPost:
+			store, err := deps.Stores.ForUser(current)
+			if err != nil {
+				http.Error(w, "failed to open store", http.StatusInternalServerError)
+				return
+			}
 			var body struct {
 				Title   string   `json:"title"`
 				DueDate string   `json:"due_date"`
@@ -227,7 +336,7 @@ func apiTasksHandler(mgr *StoreManager) http.HandlerFunc {
 				writeStoreErr(w, err)
 				return
 			}
-			writeJSON(w, http.StatusCreated, t)
+			writeJSON(w, http.StatusCreated, TaskView{Task: t, Owner: current, Public: store.HasAnyPublicLabel(t)})
 
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -237,7 +346,7 @@ func apiTasksHandler(mgr *StoreManager) http.HandlerFunc {
 
 func apiTaskByIDHandler(mgr *StoreManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		store := userStore(w, r, mgr)
+		store := userStoreOrNil(w, r, mgr)
 		if store == nil {
 			return
 		}
@@ -299,7 +408,8 @@ func apiTaskByIDHandler(mgr *StoreManager) http.HandlerFunc {
 					return
 				}
 			}
-			writeJSON(w, http.StatusOK, updated)
+			current := usernameFromRequest(r)
+			writeJSON(w, http.StatusOK, TaskView{Task: updated, Owner: current, Public: store.HasAnyPublicLabel(updated)})
 
 		case http.MethodDelete:
 			if err := store.Remove(id); err != nil {
@@ -316,7 +426,7 @@ func apiTaskByIDHandler(mgr *StoreManager) http.HandlerFunc {
 
 func apiReorderHandler(mgr *StoreManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		store := userStore(w, r, mgr)
+		store := userStoreOrNil(w, r, mgr)
 		if store == nil {
 			return
 		}
@@ -344,17 +454,72 @@ func apiReorderHandler(mgr *StoreManager) http.HandlerFunc {
 	}
 }
 
-func apiLabelsHandler(mgr *StoreManager) http.HandlerFunc {
+func apiLabelsHandler(deps serverDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		store := userStore(w, r, mgr)
-		if store == nil {
-			return
-		}
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		writeJSON(w, http.StatusOK, store.Labels())
+		current := usernameFromRequest(r)
+		seen := map[string]bool{}
+		appendFrom := func(s *Store, onlyPublic bool) {
+			for _, t := range s.List() {
+				for _, l := range t.Labels {
+					if onlyPublic && !s.IsPublic(l) {
+						continue
+					}
+					seen[l] = true
+				}
+			}
+		}
+		if me, err := deps.Stores.ForUser(current); err == nil {
+			appendFrom(me, false)
+		}
+		for _, other := range deps.Users.Usernames() {
+			if other == current {
+				continue
+			}
+			if s, err := deps.Stores.ForUser(other); err == nil {
+				appendFrom(s, true)
+			}
+		}
+		labels := make([]string, 0, len(seen))
+		for l := range seen {
+			labels = append(labels, l)
+		}
+		sort.Strings(labels)
+		writeJSON(w, http.StatusOK, labels)
+	}
+}
+
+func apiPublicLabelsHandler(mgr *StoreManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		store := userStoreOrNil(w, r, mgr)
+		if store == nil {
+			return
+		}
+		switch r.Method {
+		case http.MethodGet:
+			writeJSON(w, http.StatusOK, store.GetPublicLabels())
+
+		case http.MethodPut:
+			var body struct {
+				Labels []string `json:"labels"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "invalid json", http.StatusBadRequest)
+				return
+			}
+			updated, err := store.SetPublicLabels(body.Labels)
+			if err != nil {
+				writeStoreErr(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, updated)
+
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	}
 }
 
@@ -374,3 +539,4 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
+

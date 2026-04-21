@@ -21,10 +21,11 @@ type Task struct {
 }
 
 type Store struct {
-	mu     sync.Mutex
-	path   string
-	NextID int    `json:"next_id"`
-	Tasks  []Task `json:"tasks"`
+	mu            sync.Mutex
+	path          string
+	NextID        int      `json:"next_id"`
+	Tasks         []Task   `json:"tasks"`
+	PublicLabels  []string `json:"public_labels,omitempty"`
 }
 
 // NewTask is the input to Add. Makes it easy to add fields without breaking callers.
@@ -432,6 +433,111 @@ func HasLabel(t Task, label string) bool {
 	label = strings.ToLower(strings.TrimSpace(label))
 	for _, l := range t.Labels {
 		if l == label {
+			return true
+		}
+	}
+	return false
+}
+
+// GetPublicLabels returns a copy of the public-label list.
+func (s *Store) GetPublicLabels() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.PublicLabels))
+	copy(out, s.PublicLabels)
+	return out
+}
+
+// IsPublic returns true if a label is marked public.
+func (s *Store) IsPublic(label string) bool {
+	label = strings.ToLower(strings.TrimSpace(label))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, l := range s.PublicLabels {
+		if l == label {
+			return true
+		}
+	}
+	return false
+}
+
+// SetPublicLabels replaces the set of public labels with the given list
+// (normalized and deduped).
+func (s *Store) SetPublicLabels(labels []string) ([]string, error) {
+	normalized, err := normalizeLabels(labels)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.PublicLabels = normalized
+	if err := s.save(); err != nil {
+		return nil, err
+	}
+	out := make([]string, len(s.PublicLabels))
+	copy(out, s.PublicLabels)
+	return out, nil
+}
+
+func (s *Store) AddPublicLabel(label string) ([]string, error) {
+	l, err := validateLabel(label)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.PublicLabels {
+		if existing == l {
+			out := make([]string, len(s.PublicLabels))
+			copy(out, s.PublicLabels)
+			return out, nil
+		}
+	}
+	s.PublicLabels = append(s.PublicLabels, l)
+	if err := s.save(); err != nil {
+		return nil, err
+	}
+	out := make([]string, len(s.PublicLabels))
+	copy(out, s.PublicLabels)
+	return out, nil
+}
+
+func (s *Store) RemovePublicLabel(label string) ([]string, error) {
+	l, err := validateLabel(label)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.PublicLabels[:0]
+	for _, existing := range s.PublicLabels {
+		if existing != l {
+			kept = append(kept, existing)
+		}
+	}
+	s.PublicLabels = kept
+	if err := s.save(); err != nil {
+		return nil, err
+	}
+	out := make([]string, len(s.PublicLabels))
+	copy(out, s.PublicLabels)
+	return out, nil
+}
+
+// HasAnyPublicLabel returns true if the task has at least one label
+// that is in the owner's public set.
+func (s *Store) HasAnyPublicLabel(t Task) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.PublicLabels) == 0 || len(t.Labels) == 0 {
+		return false
+	}
+	public := make(map[string]bool, len(s.PublicLabels))
+	for _, l := range s.PublicLabels {
+		public[l] = true
+	}
+	for _, l := range t.Labels {
+		if public[l] {
 			return true
 		}
 	}

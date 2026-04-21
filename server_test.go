@@ -45,10 +45,11 @@ func newTestEnv(t *testing.T) *testEnv {
 	mux.HandleFunc("/api/login", apiLoginHandler(deps))
 	mux.HandleFunc("/api/logout", apiLogoutHandler(deps))
 	mux.HandleFunc("/api/me", deps.Sessions.requireAuth(apiMeHandler()))
-	mux.HandleFunc("/api/tasks", deps.Sessions.requireAuth(apiTasksHandler(deps.Stores)))
+	mux.HandleFunc("/api/tasks", deps.Sessions.requireAuth(apiTasksHandler(deps)))
 	mux.HandleFunc("/api/tasks/", deps.Sessions.requireAuth(apiTaskByIDHandler(deps.Stores)))
 	mux.HandleFunc("/api/reorder", deps.Sessions.requireAuth(apiReorderHandler(deps.Stores)))
-	mux.HandleFunc("/api/labels", deps.Sessions.requireAuth(apiLabelsHandler(deps.Stores)))
+	mux.HandleFunc("/api/labels", deps.Sessions.requireAuth(apiLabelsHandler(deps)))
+	mux.HandleFunc("/api/public-labels", deps.Sessions.requireAuth(apiPublicLabelsHandler(deps.Stores)))
 	env.mux = mux
 	return env
 }
