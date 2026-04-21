@@ -12,31 +12,51 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newRootCmd(store *Store) *cobra.Command {
+func newRootCmd() *cobra.Command {
+	var user string
 	root := &cobra.Command{
 		Use:           "todo-go",
-		Short:         "A tiny to-do list: CLI, HTTP API, and web UI",
+		Short:         "A tiny multi-user to-do list: CLI, HTTP API, and web UI",
 		SilenceUsage:  true,
 		SilenceErrors: false,
 	}
+	root.PersistentFlags().StringVar(&user, "user", "", `which user's tasks to act on (env: TODO_GO_USER; default: "default")`)
+
+	openStore := func() (*Store, error) {
+		u := resolveUser(user)
+		return OpenUserStore(u)
+	}
+
 	root.AddCommand(
-		newAddCmd(store),
-		newListCmd(store),
-		newDoneCmd(store),
-		newUndoneCmd(store),
-		newEditCmd(store),
-		newDueCmd(store),
-		newUndueCmd(store),
-		newTagCmd(store),
-		newUntagCmd(store),
-		newLabelsCmd(store),
-		newRemoveCmd(store),
-		newServeCmd(store),
+		newAddCmd(openStore),
+		newListCmd(openStore),
+		newDoneCmd(openStore),
+		newUndoneCmd(openStore),
+		newEditCmd(openStore),
+		newDueCmd(openStore),
+		newUndueCmd(openStore),
+		newTagCmd(openStore),
+		newUntagCmd(openStore),
+		newLabelsCmd(openStore),
+		newRemoveCmd(openStore),
+		newServeCmd(),
 	)
 	return root
 }
 
-func newAddCmd(store *Store) *cobra.Command {
+func resolveUser(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if env := os.Getenv("TODO_GO_USER"); env != "" {
+		return env
+	}
+	return "default"
+}
+
+type storeOpener func() (*Store, error)
+
+func newAddCmd(open storeOpener) *cobra.Command {
 	var due string
 	var labels []string
 	cmd := &cobra.Command{
@@ -44,6 +64,10 @@ func newAddCmd(store *Store) *cobra.Command {
 		Short: "Add a new task",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := open()
+			if err != nil {
+				return err
+			}
 			t, err := store.Add(NewTask{Title: args[0], DueDate: due, Labels: labels})
 			if err != nil {
 				return err
@@ -57,7 +81,7 @@ func newAddCmd(store *Store) *cobra.Command {
 	return cmd
 }
 
-func newListCmd(store *Store) *cobra.Command {
+func newListCmd(open storeOpener) *cobra.Command {
 	var pending, done bool
 	var sortMode string
 	var label string
@@ -65,6 +89,10 @@ func newListCmd(store *Store) *cobra.Command {
 		Use:   "list",
 		Short: "List tasks",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := open()
+			if err != nil {
+				return err
+			}
 			if pending && done {
 				return errors.New("--pending and --done are mutually exclusive")
 			}
@@ -100,12 +128,16 @@ func newListCmd(store *Store) *cobra.Command {
 	return cmd
 }
 
-func newDoneCmd(store *Store) *cobra.Command {
+func newDoneCmd(open storeOpener) *cobra.Command {
 	return &cobra.Command{
 		Use:   "done <id>",
 		Short: "Mark a task as done",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := open()
+			if err != nil {
+				return err
+			}
 			id, err := strconv.Atoi(args[0])
 			if err != nil {
 				return fmt.Errorf("invalid id %q", args[0])
@@ -119,12 +151,16 @@ func newDoneCmd(store *Store) *cobra.Command {
 	}
 }
 
-func newUndoneCmd(store *Store) *cobra.Command {
+func newUndoneCmd(open storeOpener) *cobra.Command {
 	return &cobra.Command{
 		Use:   "undone <id>",
 		Short: "Mark a task as not done",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := open()
+			if err != nil {
+				return err
+			}
 			id, err := strconv.Atoi(args[0])
 			if err != nil {
 				return fmt.Errorf("invalid id %q", args[0])
@@ -138,12 +174,16 @@ func newUndoneCmd(store *Store) *cobra.Command {
 	}
 }
 
-func newEditCmd(store *Store) *cobra.Command {
+func newEditCmd(open storeOpener) *cobra.Command {
 	return &cobra.Command{
 		Use:   "edit <id> <new-title>",
 		Short: "Edit a task's title",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := open()
+			if err != nil {
+				return err
+			}
 			id, err := strconv.Atoi(args[0])
 			if err != nil {
 				return fmt.Errorf("invalid id %q", args[0])
@@ -158,12 +198,16 @@ func newEditCmd(store *Store) *cobra.Command {
 	}
 }
 
-func newDueCmd(store *Store) *cobra.Command {
+func newDueCmd(open storeOpener) *cobra.Command {
 	return &cobra.Command{
 		Use:   "due <id> <date>",
 		Short: "Set or change a task's due date (YYYY-MM-DD)",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := open()
+			if err != nil {
+				return err
+			}
 			id, err := strconv.Atoi(args[0])
 			if err != nil {
 				return fmt.Errorf("invalid id %q", args[0])
@@ -178,12 +222,16 @@ func newDueCmd(store *Store) *cobra.Command {
 	}
 }
 
-func newUndueCmd(store *Store) *cobra.Command {
+func newUndueCmd(open storeOpener) *cobra.Command {
 	return &cobra.Command{
 		Use:   "undue <id>",
 		Short: "Clear a task's due date",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := open()
+			if err != nil {
+				return err
+			}
 			id, err := strconv.Atoi(args[0])
 			if err != nil {
 				return fmt.Errorf("invalid id %q", args[0])
@@ -197,12 +245,16 @@ func newUndueCmd(store *Store) *cobra.Command {
 	}
 }
 
-func newTagCmd(store *Store) *cobra.Command {
+func newTagCmd(open storeOpener) *cobra.Command {
 	return &cobra.Command{
 		Use:   "tag <id> <label>",
 		Short: "Add a label to a task",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := open()
+			if err != nil {
+				return err
+			}
 			id, err := strconv.Atoi(args[0])
 			if err != nil {
 				return fmt.Errorf("invalid id %q", args[0])
@@ -217,12 +269,16 @@ func newTagCmd(store *Store) *cobra.Command {
 	}
 }
 
-func newUntagCmd(store *Store) *cobra.Command {
+func newUntagCmd(open storeOpener) *cobra.Command {
 	return &cobra.Command{
 		Use:   "untag <id> <label>",
 		Short: "Remove a label from a task",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := open()
+			if err != nil {
+				return err
+			}
 			id, err := strconv.Atoi(args[0])
 			if err != nil {
 				return fmt.Errorf("invalid id %q", args[0])
@@ -241,12 +297,16 @@ func newUntagCmd(store *Store) *cobra.Command {
 	}
 }
 
-func newLabelsCmd(store *Store) *cobra.Command {
+func newLabelsCmd(open storeOpener) *cobra.Command {
 	return &cobra.Command{
 		Use:   "labels",
 		Short: "List all labels in use",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := open()
+			if err != nil {
+				return err
+			}
 			labels := store.Labels()
 			if len(labels) == 0 {
 				fmt.Println("(no labels)")
@@ -260,13 +320,17 @@ func newLabelsCmd(store *Store) *cobra.Command {
 	}
 }
 
-func newRemoveCmd(store *Store) *cobra.Command {
+func newRemoveCmd(open storeOpener) *cobra.Command {
 	return &cobra.Command{
 		Use:     "remove <id>",
 		Aliases: []string{"rm"},
 		Short:   "Remove a task",
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			store, err := open()
+			if err != nil {
+				return err
+			}
 			id, err := strconv.Atoi(args[0])
 			if err != nil {
 				return fmt.Errorf("invalid id %q", args[0])
@@ -280,7 +344,7 @@ func newRemoveCmd(store *Store) *cobra.Command {
 	}
 }
 
-func newServeCmd(store *Store) *cobra.Command {
+func newServeCmd() *cobra.Command {
 	var addr string
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -289,7 +353,16 @@ func newServeCmd(store *Store) *cobra.Command {
 			if envAddr := os.Getenv("TODO_GO_ADDR"); envAddr != "" && !cmd.Flags().Changed("addr") {
 				addr = envAddr
 			}
-			return runServer(store, addr)
+			users, err := OpenUsers("")
+			if err != nil {
+				return fmt.Errorf("open users: %w", err)
+			}
+			deps := serverDeps{
+				Users:    users,
+				Stores:   NewStoreManager(),
+				Sessions: NewSessionManager(),
+			}
+			return runServer(deps, addr)
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "localhost:8080", "address to listen on (env: TODO_GO_ADDR)")

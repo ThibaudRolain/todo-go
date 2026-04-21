@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Sign in · todo-go</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/auth.css" />
+</head>
+<body>
+  <div class="auth">
+    <h1>todo-go</h1>
+    <p class="sub">Sign in to your account</p>
+    <div class="card">
+      <form id="login-form">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" autocomplete="username" required />
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required />
+        <button type="submit" id="submit">Sign in</button>
+        <div class="error" id="error"></div>
+      </form>
+    </div>
+    <p class="switch">No account yet? <a href="/register">Create one</a></p>
+  </div>
+
+  <script>
+    const form = document.getElementById("login-form");
+    const errorEl = document.getElementById("error");
+    const submitEl = document.getElementById("submit");
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorEl.textContent = "";
+      submitEl.disabled = true;
+      try {
+        const res = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: document.getElementById("username").value,
+            password: document.getElementById("password").value,
+          }),
+        });
+        if (res.ok) {
+          window.location.href = "/";
+        } else {
+          const msg = (await res.text()).trim() || "Sign-in failed";
+          errorEl.textContent = msg;
+        }
+      } catch (err) {
+        errorEl.textContent = "Network error";
+      } finally {
+        submitEl.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -16,7 +16,7 @@ type Task struct {
 	ID      int      `json:"id"`
 	Title   string   `json:"title"`
 	Done    bool     `json:"done"`
-	DueDate string   `json:"due_date,omitempty"` // YYYY-MM-DD, empty = none
+	DueDate string   `json:"due_date,omitempty"`
 	Labels  []string `json:"labels,omitempty"`
 }
 
@@ -62,7 +62,6 @@ func validateDueDate(s string) error {
 	return nil
 }
 
-// normalizeLabels lowercases, trims, and dedupes; rejects empty or whitespace-containing labels.
 func normalizeLabels(raw []string) ([]string, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -97,7 +96,9 @@ func validateLabel(label string) (string, error) {
 	return normalized[0], nil
 }
 
-func defaultStorePath() (string, error) {
+// defaultDataDir is the root directory under which per-user data lives.
+// Override via TODO_GO_DATA env var (now pointing at a directory, not a file).
+func defaultDataDir() (string, error) {
 	if p := os.Getenv("TODO_GO_DATA"); p != "" {
 		return p, nil
 	}
@@ -105,16 +106,48 @@ func defaultStorePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".todo-go", "tasks.json"), nil
+	return filepath.Join(home, ".todo-go"), nil
+}
+
+// userStorePath returns the path to tasks.json for a given user.
+func userStorePath(username string) (string, error) {
+	base, err := defaultDataDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(base, "users", username, "tasks.json"), nil
+}
+
+// migrateLegacyTasks moves ~/.todo-go/tasks.json → ~/.todo-go/users/<target>/tasks.json
+// if the legacy file exists and the target doesn't. Returns whether a migration happened.
+func migrateLegacyTasks(target string) (bool, error) {
+	base, err := defaultDataDir()
+	if err != nil {
+		return false, err
+	}
+	legacy := filepath.Join(base, "tasks.json")
+	if _, err := os.Stat(legacy); err != nil {
+		return false, nil
+	}
+	newPath, err := userStorePath(target)
+	if err != nil {
+		return false, err
+	}
+	if _, err := os.Stat(newPath); err == nil {
+		return false, nil // already exists, don't overwrite
+	}
+	if err := os.MkdirAll(filepath.Dir(newPath), 0o755); err != nil {
+		return false, err
+	}
+	if err := os.Rename(legacy, newPath); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func OpenStore(path string) (*Store, error) {
 	if path == "" {
-		p, err := defaultStorePath()
-		if err != nil {
-			return nil, err
-		}
-		path = p
+		return nil, errors.New("OpenStore: empty path")
 	}
 	s := &Store{path: path, NextID: 1, Tasks: []Task{}}
 	data, err := os.ReadFile(path)
@@ -136,6 +169,15 @@ func OpenStore(path string) (*Store, error) {
 	return s, nil
 }
 
+// OpenUserStore opens the store for a given username, creating the dir if needed.
+func OpenUserStore(username string) (*Store, error) {
+	path, err := userStorePath(username)
+	if err != nil {
+		return nil, err
+	}
+	return OpenStore(path)
+}
+
 func (s *Store) save() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return err
@@ -155,7 +197,6 @@ func (s *Store) List() []Task {
 	return out
 }
 
-// Labels returns every distinct label present across all tasks, sorted.
 func (s *Store) Labels() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -281,7 +322,7 @@ func (s *Store) AddLabel(id int, label string) (Task, error) {
 		}
 		for _, existing := range s.Tasks[i].Labels {
 			if existing == l {
-				return s.Tasks[i], nil // already present, no-op
+				return s.Tasks[i], nil
 			}
 		}
 		s.Tasks[i].Labels = append(s.Tasks[i].Labels, l)
@@ -355,9 +396,6 @@ func (s *Store) Reorder(ids []int) error {
 	return s.save()
 }
 
-// SortTasks sorts a slice in place according to the given mode.
-// SortByDue: pending-with-due (earliest first) → pending-no-due → done.
-// SortManual: no-op (keeps insertion order).
 func SortTasks(tasks []Task, mode SortMode) {
 	if mode != SortByDue {
 		return
@@ -378,7 +416,6 @@ func SortTasks(tasks []Task, mode SortMode) {
 	})
 }
 
-// IsOverdue returns true if the task has a past due date and is not done.
 func IsOverdue(t Task, today time.Time) bool {
 	if t.Done || t.DueDate == "" {
 		return false
@@ -391,7 +428,6 @@ func IsOverdue(t Task, today time.Time) bool {
 	return due.Before(todayStart)
 }
 
-// HasLabel reports whether the task has the given label (case-insensitive).
 func HasLabel(t Task, label string) bool {
 	label = strings.ToLower(strings.TrimSpace(label))
 	for _, l := range t.Labels {
@@ -400,4 +436,29 @@ func HasLabel(t Task, label string) bool {
 		}
 	}
 	return false
+}
+
+// StoreManager caches per-user Stores so concurrent requests from the same user
+// share a single mutex.
+type StoreManager struct {
+	mu     sync.Mutex
+	stores map[string]*Store
+}
+
+func NewStoreManager() *StoreManager {
+	return &StoreManager{stores: make(map[string]*Store)}
+}
+
+func (sm *StoreManager) ForUser(username string) (*Store, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if s, ok := sm.stores[username]; ok {
+		return s, nil
+	}
+	s, err := OpenUserStore(username)
+	if err != nil {
+		return nil, err
+	}
+	sm.stores[username] = s
+	return s, nil
 }

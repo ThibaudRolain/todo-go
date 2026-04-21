@@ -14,45 +14,187 @@ import (
 //go:embed web
 var webFS embed.FS
 
-func runServer(store *Store, addr string) error {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/tasks", apiTasksHandler(store))
-	mux.HandleFunc("/api/tasks/", apiTaskByIDHandler(store))
-	mux.HandleFunc("/api/reorder", apiReorderHandler(store))
-	mux.HandleFunc("/api/labels", apiLabelsHandler(store))
+type serverDeps struct {
+	Users    *UserStore
+	Stores   *StoreManager
+	Sessions *SessionManager
+}
 
+func runServer(deps serverDeps, addr string) error {
+	mux := http.NewServeMux()
+
+	// Auth API (public)
+	mux.HandleFunc("/api/register", apiRegisterHandler(deps))
+	mux.HandleFunc("/api/login", apiLoginHandler(deps))
+	mux.HandleFunc("/api/logout", apiLogoutHandler(deps))
+	mux.HandleFunc("/api/me", deps.Sessions.requireAuth(apiMeHandler()))
+
+	// Task API (protected)
+	mux.HandleFunc("/api/tasks", deps.Sessions.requireAuth(apiTasksHandler(deps.Stores)))
+	mux.HandleFunc("/api/tasks/", deps.Sessions.requireAuth(apiTaskByIDHandler(deps.Stores)))
+	mux.HandleFunc("/api/reorder", deps.Sessions.requireAuth(apiReorderHandler(deps.Stores)))
+	mux.HandleFunc("/api/labels", deps.Sessions.requireAuth(apiLabelsHandler(deps.Stores)))
+
+	// Static web (gates index.html behind auth; login/register are public)
 	webRoot, err := fs.Sub(webFS, "web")
 	if err != nil {
 		return err
 	}
-	mux.Handle("/", http.FileServer(http.FS(webRoot)))
+	staticFS := http.FileServer(http.FS(webRoot))
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Public pages
+		switch r.URL.Path {
+		case "/login", "/register":
+			serveStaticPage(w, r, webRoot, r.URL.Path+".html")
+			return
+		}
+		// Any other path: require auth
+		if deps.Sessions.userFromRequest(r) == "" {
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		}
+		staticFS.ServeHTTP(w, r)
+	})
 
 	fmt.Printf("todo-go serving on http://%s\n", addr)
 	return http.ListenAndServe(addr, mux)
 }
 
-func apiTasksHandler(store *Store) http.HandlerFunc {
+func serveStaticPage(w http.ResponseWriter, r *http.Request, webRoot fs.FS, name string) {
+	name = strings.TrimPrefix(name, "/")
+	data, err := fs.ReadFile(webRoot, name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write(data)
+}
+
+// --- Auth routes -----------------------------------------------------------
+
+func apiRegisterHandler(deps serverDeps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+
+		firstUser := deps.Users.Count() == 0
+		username, err := deps.Users.Register(body.Username, body.Password)
+		if err != nil {
+			switch {
+			case errors.Is(err, ErrUserExists):
+				http.Error(w, err.Error(), http.StatusConflict)
+			case errors.Is(err, ErrInvalidUsername), errors.Is(err, ErrPasswordTooShort):
+				http.Error(w, err.Error(), http.StatusBadRequest)
+			default:
+				http.Error(w, "internal error", http.StatusInternalServerError)
+			}
+			return
+		}
+
+		// On first-ever user, adopt any legacy tasks.json.
+		if firstUser {
+			if _, migErr := migrateLegacyTasks(username); migErr != nil {
+				fmt.Printf("warning: legacy task migration failed for %s: %v\n", username, migErr)
+			}
+		}
+
+		token := deps.Sessions.Issue(username)
+		setSessionCookie(w, token)
+		writeJSON(w, http.StatusCreated, map[string]string{"username": username})
+	}
+}
+
+func apiLoginHandler(deps serverDeps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid json", http.StatusBadRequest)
+			return
+		}
+		username, err := deps.Users.Authenticate(body.Username, body.Password)
+		if err != nil {
+			http.Error(w, "invalid username or password", http.StatusUnauthorized)
+			return
+		}
+		token := deps.Sessions.Issue(username)
+		setSessionCookie(w, token)
+		writeJSON(w, http.StatusOK, map[string]string{"username": username})
+	}
+}
+
+func apiLogoutHandler(deps serverDeps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if c, err := r.Cookie(sessionCookieName); err == nil {
+			deps.Sessions.Revoke(c.Value)
+		}
+		clearSessionCookie(w)
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func apiMeHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"username": usernameFromRequest(r)})
+	}
+}
+
+// --- Task routes (per-user) ------------------------------------------------
+
+func userStore(w http.ResponseWriter, r *http.Request, mgr *StoreManager) *Store {
+	user := usernameFromRequest(r)
+	s, err := mgr.ForUser(user)
+	if err != nil {
+		http.Error(w, "failed to open store", http.StatusInternalServerError)
+		return nil
+	}
+	return s
+}
+
+func apiTasksHandler(mgr *StoreManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		store := userStore(w, r, mgr)
+		if store == nil {
+			return
+		}
 		switch r.Method {
 		case http.MethodGet:
 			tasks := store.List()
-
 			switch r.URL.Query().Get("status") {
 			case "pending":
 				tasks = filterByDone(tasks, false)
 			case "done":
 				tasks = filterByDone(tasks, true)
 			case "", "all":
-				// no filter
 			default:
 				http.Error(w, "invalid status; want one of: pending, done, all", http.StatusBadRequest)
 				return
 			}
-
 			if label := r.URL.Query().Get("label"); label != "" {
 				tasks = filterByLabel(tasks, label)
 			}
-
 			sortParam := r.URL.Query().Get("sort")
 			if sortParam == "" {
 				sortParam = string(SortByDue)
@@ -93,8 +235,12 @@ func apiTasksHandler(store *Store) http.HandlerFunc {
 	}
 }
 
-func apiTaskByIDHandler(store *Store) http.HandlerFunc {
+func apiTaskByIDHandler(mgr *StoreManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		store := userStore(w, r, mgr)
+		if store == nil {
+			return
+		}
 		idStr := strings.TrimPrefix(r.URL.Path, "/api/tasks/")
 		idStr = strings.TrimSuffix(idStr, "/")
 		id, err := strconv.Atoi(idStr)
@@ -119,7 +265,6 @@ func apiTaskByIDHandler(store *Store) http.HandlerFunc {
 				http.Error(w, "no fields to update", http.StatusBadRequest)
 				return
 			}
-
 			var updated Task
 			if body.Title != nil {
 				title := strings.TrimSpace(*body.Title)
@@ -169,8 +314,12 @@ func apiTaskByIDHandler(store *Store) http.HandlerFunc {
 	}
 }
 
-func apiReorderHandler(store *Store) http.HandlerFunc {
+func apiReorderHandler(mgr *StoreManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		store := userStore(w, r, mgr)
+		if store == nil {
+			return
+		}
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -195,8 +344,12 @@ func apiReorderHandler(store *Store) http.HandlerFunc {
 	}
 }
 
-func apiLabelsHandler(store *Store) http.HandlerFunc {
+func apiLabelsHandler(mgr *StoreManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		store := userStore(w, r, mgr)
+		if store == nil {
+			return
+		}
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return

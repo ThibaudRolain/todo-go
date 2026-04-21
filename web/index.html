@@ -46,6 +46,24 @@
     }
     .app { width: 100%; max-width: 44rem; }
     h1 { margin: 0 0 0.5rem; font-size: 1.75rem; }
+    .app-header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .user-box { display: flex; align-items: center; gap: 0.5rem; }
+    .user-name { color: var(--muted); font-size: 0.9rem; }
+    .user-name::before { content: "@"; }
+    .logout {
+      padding: 0.3rem 0.7rem;
+      font-size: 0.85rem;
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+    }
+    .logout:hover { color: var(--text); }
     .hint { color: var(--muted); font-size: 0.85rem; margin: 0 0 1.25rem; }
     kbd {
       background: var(--card);
@@ -206,7 +224,13 @@
 </head>
 <body>
   <div class="app">
-    <h1>todo-go</h1>
+    <div class="app-header">
+      <h1>todo-go</h1>
+      <div class="user-box">
+        <span id="user-name" class="user-name"></span>
+        <button id="logout" class="logout" type="button">Sign out</button>
+      </div>
+    </div>
     <p class="hint">
       <kbd>/</kbd> focus · <kbd>Enter</kbd> save · <kbd>Esc</kbd> cancel · click title/date/label to edit · right-click label to remove · drag to reorder (manual sort)
     </p>
@@ -259,6 +283,22 @@
     let dragSrcID = null;
 
     const todayISO = () => new Date().toISOString().slice(0, 10);
+
+    async function bootstrapUser() {
+      const res = await fetch("/api/me");
+      if (res.status === 401) {
+        window.location.href = "/login";
+        return null;
+      }
+      const data = await res.json();
+      document.getElementById("user-name").textContent = data.username || "";
+      return data.username;
+    }
+
+    document.getElementById("logout").addEventListener("click", async () => {
+      await fetch("/api/logout", { method: "POST" });
+      window.location.href = "/login";
+    });
 
     function updateLabelFilterUI() {
       if (currentLabel) {
@@ -584,7 +624,7 @@
       }
     });
 
-    refresh();
+    bootstrapUser().then((user) => { if (user) refresh(); });
   </script>
 </body>
 </html>
