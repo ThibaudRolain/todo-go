@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -22,6 +23,8 @@ func newRootCmd(store *Store) *cobra.Command {
 		newDoneCmd(store),
 		newUndoneCmd(store),
 		newEditCmd(store),
+		newDueCmd(store),
+		newUndueCmd(store),
 		newRemoveCmd(store),
 		newServeCmd(store),
 	)
@@ -29,29 +32,41 @@ func newRootCmd(store *Store) *cobra.Command {
 }
 
 func newAddCmd(store *Store) *cobra.Command {
-	return &cobra.Command{
+	var due string
+	cmd := &cobra.Command{
 		Use:   "add <title>",
 		Short: "Add a new task",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			t, err := store.Add(args[0])
+			t, err := store.Add(args[0], due)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("added #%d: %s\n", t.ID, t.Title)
+			if t.DueDate != "" {
+				fmt.Printf("added #%d: %s (due %s)\n", t.ID, t.Title, t.DueDate)
+			} else {
+				fmt.Printf("added #%d: %s\n", t.ID, t.Title)
+			}
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&due, "due", "", "due date (YYYY-MM-DD)")
+	return cmd
 }
 
 func newListCmd(store *Store) *cobra.Command {
 	var pending, done bool
+	var sortMode string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List tasks",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if pending && done {
 				return errors.New("--pending and --done are mutually exclusive")
+			}
+			mode := SortMode(sortMode)
+			if mode != SortManual && mode != SortByDue {
+				return fmt.Errorf("invalid --sort %q (want: manual, due)", sortMode)
 			}
 			tasks := store.List()
 			switch {
@@ -60,22 +75,32 @@ func newListCmd(store *Store) *cobra.Command {
 			case done:
 				tasks = filterByDone(tasks, true)
 			}
+			SortTasks(tasks, mode)
 			if len(tasks) == 0 {
 				fmt.Println("(no tasks)")
 				return nil
 			}
+			today := time.Now()
 			for _, t := range tasks {
 				status := "[ ]"
 				if t.Done {
 					status = "[x]"
 				}
-				fmt.Printf("%s %d. %s\n", status, t.ID, t.Title)
+				line := fmt.Sprintf("%s %d. %s", status, t.ID, t.Title)
+				switch {
+				case IsOverdue(t, today):
+					line += fmt.Sprintf(" — OVERDUE (%s)", t.DueDate)
+				case t.DueDate != "":
+					line += fmt.Sprintf(" — due %s", t.DueDate)
+				}
+				fmt.Println(line)
 			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&pending, "pending", false, "only show tasks that are not done")
 	cmd.Flags().BoolVar(&done, "done", false, "only show tasks that are done")
+	cmd.Flags().StringVar(&sortMode, "sort", string(SortByDue), "sort order: due, manual")
 	return cmd
 }
 
@@ -132,6 +157,45 @@ func newEditCmd(store *Store) *cobra.Command {
 				return err
 			}
 			fmt.Printf("updated #%d: %s\n", t.ID, t.Title)
+			return nil
+		},
+	}
+}
+
+func newDueCmd(store *Store) *cobra.Command {
+	return &cobra.Command{
+		Use:   "due <id> <date>",
+		Short: "Set or change a task's due date (YYYY-MM-DD)",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.Atoi(args[0])
+			if err != nil {
+				return fmt.Errorf("invalid id %q", args[0])
+			}
+			t, err := store.SetDue(id, args[1])
+			if err != nil {
+				return err
+			}
+			fmt.Printf("set #%d due to %s\n", t.ID, t.DueDate)
+			return nil
+		},
+	}
+}
+
+func newUndueCmd(store *Store) *cobra.Command {
+	return &cobra.Command{
+		Use:   "undue <id>",
+		Short: "Clear a task's due date",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.Atoi(args[0])
+			if err != nil {
+				return fmt.Errorf("invalid id %q", args[0])
+			}
+			if _, err := store.SetDue(id, ""); err != nil {
+				return err
+			}
+			fmt.Printf("cleared due date on #%d\n", id)
 			return nil
 		},
 	}

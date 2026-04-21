@@ -73,10 +73,38 @@ func TestAPI_AddAndList(t *testing.T) {
 	}
 }
 
+func TestAPI_AddWithDueDate(t *testing.T) {
+	_, h := newTestServer(t)
+
+	rec := doJSON(t, h, http.MethodPost, "/api/tasks", map[string]string{
+		"title":    "buy milk",
+		"due_date": "2026-05-01",
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+	var created Task
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+	if created.DueDate != "2026-05-01" {
+		t.Fatalf("want due 2026-05-01, got %q", created.DueDate)
+	}
+}
+
+func TestAPI_AddRejectsBadDue(t *testing.T) {
+	_, h := newTestServer(t)
+	rec := doJSON(t, h, http.MethodPost, "/api/tasks", map[string]string{
+		"title":    "x",
+		"due_date": "not-a-date",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for bad due date, got %d", rec.Code)
+	}
+}
+
 func TestAPI_ListStatusFilter(t *testing.T) {
 	s, h := newTestServer(t)
-	s.Add("a")
-	s.Add("b")
+	s.Add("a", "")
+	s.Add("b", "")
 	s.SetDone(1, true)
 
 	assertListLen := func(path string, want int) {
@@ -102,6 +130,48 @@ func TestAPI_ListStatusFilter(t *testing.T) {
 	}
 }
 
+func TestAPI_ListSortByDue(t *testing.T) {
+	s, h := newTestServer(t)
+	s.Add("no due", "")
+	s.Add("late", "2026-05-10")
+	s.Add("early", "2026-05-01")
+
+	rec := doJSON(t, h, http.MethodGet, "/api/tasks?sort=due", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var tasks []Task
+	_ = json.Unmarshal(rec.Body.Bytes(), &tasks)
+	if len(tasks) != 3 {
+		t.Fatalf("want 3 tasks, got %d", len(tasks))
+	}
+	if tasks[0].Title != "early" || tasks[1].Title != "late" || tasks[2].Title != "no due" {
+		t.Fatalf("sort order wrong: %+v", tasks)
+	}
+}
+
+func TestAPI_ListSortManualPreservesInsertion(t *testing.T) {
+	s, h := newTestServer(t)
+	s.Add("third", "2026-01-01")
+	s.Add("first", "")
+	s.Add("second", "2026-09-09")
+
+	rec := doJSON(t, h, http.MethodGet, "/api/tasks?sort=manual", nil)
+	var tasks []Task
+	_ = json.Unmarshal(rec.Body.Bytes(), &tasks)
+	if tasks[0].Title != "third" || tasks[1].Title != "first" || tasks[2].Title != "second" {
+		t.Fatalf("manual sort should keep insertion order, got %+v", tasks)
+	}
+}
+
+func TestAPI_ListBadSort(t *testing.T) {
+	_, h := newTestServer(t)
+	rec := doJSON(t, h, http.MethodGet, "/api/tasks?sort=nope", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
+	}
+}
+
 func TestAPI_AddRejectsEmptyTitle(t *testing.T) {
 	_, h := newTestServer(t)
 	rec := doJSON(t, h, http.MethodPost, "/api/tasks", map[string]string{"title": "   "})
@@ -112,17 +182,14 @@ func TestAPI_AddRejectsEmptyTitle(t *testing.T) {
 
 func TestAPI_PatchMarksDone(t *testing.T) {
 	s, h := newTestServer(t)
-	s.Add("a")
+	s.Add("a", "")
 
-	done := true
-	rec := doJSON(t, h, http.MethodPatch, "/api/tasks/1", map[string]any{"done": done})
+	rec := doJSON(t, h, http.MethodPatch, "/api/tasks/1", map[string]any{"done": true})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d — body: %s", rec.Code, rec.Body.String())
 	}
 	var updated Task
-	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &updated)
 	if !updated.Done {
 		t.Fatalf("want Done=true, got %+v", updated)
 	}
@@ -130,7 +197,7 @@ func TestAPI_PatchMarksDone(t *testing.T) {
 
 func TestAPI_PatchEditsTitle(t *testing.T) {
 	s, h := newTestServer(t)
-	s.Add("old")
+	s.Add("old", "")
 
 	rec := doJSON(t, h, http.MethodPatch, "/api/tasks/1", map[string]any{"title": "new"})
 	if rec.Code != http.StatusOK {
@@ -143,9 +210,49 @@ func TestAPI_PatchEditsTitle(t *testing.T) {
 	}
 }
 
+func TestAPI_PatchSetsDue(t *testing.T) {
+	s, h := newTestServer(t)
+	s.Add("x", "")
+
+	rec := doJSON(t, h, http.MethodPatch, "/api/tasks/1", map[string]any{"due_date": "2026-05-10"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+	var updated Task
+	_ = json.Unmarshal(rec.Body.Bytes(), &updated)
+	if updated.DueDate != "2026-05-10" {
+		t.Fatalf("want 2026-05-10, got %q", updated.DueDate)
+	}
+}
+
+func TestAPI_PatchClearsDue(t *testing.T) {
+	s, h := newTestServer(t)
+	s.Add("x", "2026-05-10")
+
+	rec := doJSON(t, h, http.MethodPatch, "/api/tasks/1", map[string]any{"due_date": ""})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+	var updated Task
+	_ = json.Unmarshal(rec.Body.Bytes(), &updated)
+	if updated.DueDate != "" {
+		t.Fatalf("want empty due, got %q", updated.DueDate)
+	}
+}
+
+func TestAPI_PatchRejectsBadDue(t *testing.T) {
+	s, h := newTestServer(t)
+	s.Add("x", "")
+
+	rec := doJSON(t, h, http.MethodPatch, "/api/tasks/1", map[string]any{"due_date": "2026/05/10"})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for bad due, got %d", rec.Code)
+	}
+}
+
 func TestAPI_PatchRejectsEmptyTitle(t *testing.T) {
 	s, h := newTestServer(t)
-	s.Add("old")
+	s.Add("old", "")
 
 	rec := doJSON(t, h, http.MethodPatch, "/api/tasks/1", map[string]any{"title": "   "})
 	if rec.Code != http.StatusBadRequest {
@@ -155,7 +262,7 @@ func TestAPI_PatchRejectsEmptyTitle(t *testing.T) {
 
 func TestAPI_PatchRejectsNoFields(t *testing.T) {
 	s, h := newTestServer(t)
-	s.Add("a")
+	s.Add("a", "")
 
 	rec := doJSON(t, h, http.MethodPatch, "/api/tasks/1", map[string]any{})
 	if rec.Code != http.StatusBadRequest {
@@ -173,15 +280,15 @@ func TestAPI_PatchUnknownID(t *testing.T) {
 
 func TestAPI_DeleteRemoves(t *testing.T) {
 	s, h := newTestServer(t)
-	s.Add("a")
-	s.Add("b")
+	s.Add("a", "")
+	s.Add("b", "")
 
 	rec := doJSON(t, h, http.MethodDelete, "/api/tasks/1", nil)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("want 204, got %d", rec.Code)
 	}
 
-	rec = doJSON(t, h, http.MethodGet, "/api/tasks", nil)
+	rec = doJSON(t, h, http.MethodGet, "/api/tasks?sort=manual", nil)
 	var tasks []Task
 	_ = json.Unmarshal(rec.Body.Bytes(), &tasks)
 	if len(tasks) != 1 || tasks[0].ID != 2 {
@@ -207,9 +314,9 @@ func TestAPI_MethodNotAllowed(t *testing.T) {
 
 func TestAPI_Reorder(t *testing.T) {
 	s, h := newTestServer(t)
-	s.Add("a")
-	s.Add("b")
-	s.Add("c")
+	s.Add("a", "")
+	s.Add("b", "")
+	s.Add("c", "")
 
 	rec := doJSON(t, h, http.MethodPost, "/api/reorder", map[string]any{"ids": []int{3, 1, 2}})
 	if rec.Code != http.StatusOK {
@@ -225,8 +332,8 @@ func TestAPI_Reorder(t *testing.T) {
 
 func TestAPI_ReorderBadIDs(t *testing.T) {
 	s, h := newTestServer(t)
-	s.Add("a")
-	s.Add("b")
+	s.Add("a", "")
+	s.Add("b", "")
 
 	rec := doJSON(t, h, http.MethodPost, "/api/reorder", map[string]any{"ids": []int{1, 99}})
 	if rec.Code != http.StatusBadRequest {

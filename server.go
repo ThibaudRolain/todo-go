@@ -46,10 +46,23 @@ func apiTasksHandler(store *Store) http.HandlerFunc {
 				http.Error(w, "invalid status; want one of: pending, done, all", http.StatusBadRequest)
 				return
 			}
+
+			sortParam := r.URL.Query().Get("sort")
+			if sortParam == "" {
+				sortParam = string(SortByDue)
+			}
+			mode := SortMode(sortParam)
+			if mode != SortManual && mode != SortByDue {
+				http.Error(w, "invalid sort; want one of: due, manual", http.StatusBadRequest)
+				return
+			}
+			SortTasks(tasks, mode)
 			writeJSON(w, http.StatusOK, tasks)
+
 		case http.MethodPost:
 			var body struct {
-				Title string `json:"title"`
+				Title   string `json:"title"`
+				DueDate string `json:"due_date"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid json", http.StatusBadRequest)
@@ -60,12 +73,13 @@ func apiTasksHandler(store *Store) http.HandlerFunc {
 				http.Error(w, "title required", http.StatusBadRequest)
 				return
 			}
-			t, err := store.Add(title)
+			t, err := store.Add(title, body.DueDate)
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				writeStoreErr(w, err)
 				return
 			}
 			writeJSON(w, http.StatusCreated, t)
+
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -85,14 +99,15 @@ func apiTaskByIDHandler(store *Store) http.HandlerFunc {
 		switch r.Method {
 		case http.MethodPatch:
 			var body struct {
-				Done  *bool   `json:"done"`
-				Title *string `json:"title"`
+				Done    *bool   `json:"done"`
+				Title   *string `json:"title"`
+				DueDate *string `json:"due_date"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid json", http.StatusBadRequest)
 				return
 			}
-			if body.Done == nil && body.Title == nil {
+			if body.Done == nil && body.Title == nil && body.DueDate == nil {
 				http.Error(w, "no fields to update", http.StatusBadRequest)
 				return
 			}
@@ -105,6 +120,13 @@ func apiTaskByIDHandler(store *Store) http.HandlerFunc {
 					return
 				}
 				updated, err = store.SetTitle(id, title)
+				if err != nil {
+					writeStoreErr(w, err)
+					return
+				}
+			}
+			if body.DueDate != nil {
+				updated, err = store.SetDue(id, strings.TrimSpace(*body.DueDate))
 				if err != nil {
 					writeStoreErr(w, err)
 					return
@@ -162,7 +184,7 @@ func writeStoreErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
-	case errors.Is(err, ErrEmptyTitle):
+	case errors.Is(err, ErrEmptyTitle), errors.Is(err, ErrBadDueDate):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)

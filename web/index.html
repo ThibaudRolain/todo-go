@@ -14,7 +14,9 @@
       --accent: #3b82f6;
       --border: #e5e7eb;
       --danger: #ef4444;
+      --warn: #f59e0b;
       --drop: rgba(59, 130, 246, 0.18);
+      --overdue-bg: rgba(239, 68, 68, 0.08);
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -23,6 +25,7 @@
         --text: #f3f4f6;
         --muted: #9ca3af;
         --border: #1f2937;
+        --overdue-bg: rgba(239, 68, 68, 0.16);
       }
     }
     * { box-sizing: border-box; }
@@ -37,7 +40,7 @@
       justify-content: center;
       padding: 3rem 1rem;
     }
-    .app { width: 100%; max-width: 36rem; }
+    .app { width: 100%; max-width: 40rem; }
     h1 { margin: 0 0 0.5rem; font-size: 1.75rem; }
     .hint { color: var(--muted); font-size: 0.85rem; margin: 0 0 1.25rem; }
     kbd {
@@ -55,26 +58,32 @@
       padding: 1rem 1.25rem;
       box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
-    form { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
-    .filters {
+    form { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    form > input[type="text"] { flex: 1 1 14rem; }
+    form > input[type="date"] { flex: 0 0 10rem; }
+    .toolbar {
       display: flex;
-      gap: 0.25rem;
+      gap: 0.5rem;
       margin-bottom: 0.5rem;
       font-size: 0.9rem;
+      flex-wrap: wrap;
+      align-items: center;
     }
-    .filters button {
+    .toolbar .group { display: flex; gap: 0.25rem; }
+    .toolbar .group-label { color: var(--muted); font-size: 0.8rem; margin-right: 0.25rem; }
+    .toolbar button {
       background: transparent;
       color: var(--muted);
       padding: 0.3rem 0.7rem;
       border: 1px solid transparent;
     }
-    .filters button.active {
+    .toolbar button.active {
       color: var(--text);
       background: var(--bg);
       border-color: var(--border);
     }
-    input[type="text"] {
-      flex: 1;
+    input[type="text"],
+    input[type="date"] {
       padding: 0.6rem 0.75rem;
       border: 1px solid var(--border);
       border-radius: 0.5rem;
@@ -82,7 +91,8 @@
       color: var(--text);
       font-size: 1rem;
     }
-    input[type="text"]:focus {
+    input[type="text"]:focus,
+    input[type="date"]:focus {
       outline: 2px solid var(--accent);
       outline-offset: 1px;
     }
@@ -100,14 +110,15 @@
     li {
       display: flex;
       align-items: center;
-      gap: 0.75rem;
+      gap: 0.6rem;
       padding: 0.6rem 0.4rem;
       border-bottom: 1px solid var(--border);
-      cursor: grab;
     }
+    li.draggable { cursor: grab; }
     li:last-child { border-bottom: 0; }
     li.dragging { opacity: 0.35; }
     li.drop-target { background: var(--drop); border-radius: 0.5rem; }
+    li.overdue { background: var(--overdue-bg); border-radius: 0.5rem; }
     li input[type="checkbox"] { width: 1.1rem; height: 1.1rem; cursor: pointer; }
     li .title { flex: 1; padding: 0.25rem 0; cursor: text; }
     li.done .title { text-decoration: line-through; color: var(--muted); }
@@ -119,6 +130,22 @@
       background: var(--card);
       color: var(--text);
       font-size: 1rem;
+    }
+    .due {
+      font-size: 0.8rem;
+      padding: 0.15rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--muted);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .due.overdue { color: var(--danger); border-color: var(--danger); font-weight: 600; }
+    .due.empty { color: var(--muted); font-style: italic; opacity: 0.7; }
+    .due.empty:hover { opacity: 1; }
+    .due-edit {
+      font-size: 0.8rem;
+      padding: 0.15rem 0.35rem;
     }
     .delete {
       background: transparent;
@@ -133,18 +160,29 @@
   <div class="app">
     <h1>todo-go</h1>
     <p class="hint">
-      <kbd>/</kbd> focus · <kbd>Enter</kbd> save · <kbd>Esc</kbd> cancel · click title to edit · drag to reorder
+      <kbd>/</kbd> focus · <kbd>Enter</kbd> save · <kbd>Esc</kbd> cancel · click title/date to edit · drag to reorder (manual sort)
     </p>
     <div class="card">
       <form id="add-form">
         <input id="title" type="text" placeholder="What needs doing?" autocomplete="off" required />
+        <input id="due" type="date" title="Optional due date" />
         <button type="submit">Add</button>
       </form>
-      <div class="filters" id="filters">
-        <button data-filter="all" class="active">All</button>
-        <button data-filter="pending">Pending</button>
-        <button data-filter="done">Done</button>
+
+      <div class="toolbar">
+        <div class="group">
+          <span class="group-label">Show:</span>
+          <button data-filter="all" class="active">All</button>
+          <button data-filter="pending">Pending</button>
+          <button data-filter="done">Done</button>
+        </div>
+        <div class="group">
+          <span class="group-label">Sort:</span>
+          <button data-sort="due" class="active">Due date</button>
+          <button data-sort="manual">Manual</button>
+        </div>
       </div>
+
       <ul id="list"></ul>
       <div id="empty" class="empty" hidden>(no tasks)</div>
     </div>
@@ -155,15 +193,21 @@
     const emptyEl = document.getElementById("empty");
     const form = document.getElementById("add-form");
     const titleInput = document.getElementById("title");
-    const filtersEl = document.getElementById("filters");
+    const dueInput = document.getElementById("due");
+    const toolbarEl = document.querySelector(".toolbar");
 
     let currentFilter = "all";
+    let currentSort = "due";
     let currentTasks = [];
     let dragSrcID = null;
 
+    const todayISO = () => new Date().toISOString().slice(0, 10);
+
     async function refresh() {
-      const qs = currentFilter === "all" ? "" : `?status=${currentFilter}`;
-      const res = await fetch("/api/tasks" + qs);
+      const params = new URLSearchParams();
+      if (currentFilter !== "all") params.set("status", currentFilter);
+      params.set("sort", currentSort);
+      const res = await fetch("/api/tasks?" + params.toString());
       currentTasks = (await res.json()) || [];
       render();
     }
@@ -179,8 +223,16 @@
     function renderItem(t) {
       const li = document.createElement("li");
       li.dataset.id = t.id;
-      li.draggable = currentFilter === "all";
       if (t.done) li.classList.add("done");
+
+      const draggable = currentFilter === "all" && currentSort === "manual";
+      if (draggable) {
+        li.classList.add("draggable");
+        li.draggable = true;
+      }
+
+      const overdue = !t.done && t.due_date && t.due_date < todayISO();
+      if (overdue) li.classList.add("overdue");
 
       const cb = document.createElement("input");
       cb.type = "checkbox";
@@ -190,7 +242,18 @@
       const title = document.createElement("span");
       title.className = "title";
       title.textContent = t.title;
-      title.addEventListener("click", () => startEdit(li, t));
+      title.addEventListener("click", () => startTitleEdit(li, t));
+
+      const due = document.createElement("span");
+      due.className = "due" + (overdue ? " overdue" : "") + (t.due_date ? "" : " empty");
+      due.textContent = t.due_date ? (overdue ? `⚠ ${t.due_date}` : t.due_date) : "+ due";
+      due.title = t.due_date ? "Click to change, right-click to clear" : "Click to set a due date";
+      due.addEventListener("click", () => startDueEdit(li, t));
+      due.addEventListener("contextmenu", (e) => {
+        if (!t.due_date) return;
+        e.preventDefault();
+        setDue(t.id, "");
+      });
 
       const del = document.createElement("button");
       del.className = "delete";
@@ -199,35 +262,37 @@
       del.title = "Delete";
       del.addEventListener("click", () => remove(t.id));
 
-      li.append(cb, title, del);
+      li.append(cb, title, due, del);
 
-      li.addEventListener("dragstart", (e) => {
-        dragSrcID = t.id;
-        li.classList.add("dragging");
-        e.dataTransfer.effectAllowed = "move";
-      });
-      li.addEventListener("dragend", () => {
-        dragSrcID = null;
-        li.classList.remove("dragging");
-        document.querySelectorAll("li.drop-target").forEach((el) => el.classList.remove("drop-target"));
-      });
-      li.addEventListener("dragover", (e) => {
-        if (dragSrcID === null || dragSrcID === t.id) return;
-        e.preventDefault();
-        li.classList.add("drop-target");
-      });
-      li.addEventListener("dragleave", () => li.classList.remove("drop-target"));
-      li.addEventListener("drop", (e) => {
-        e.preventDefault();
-        li.classList.remove("drop-target");
-        if (dragSrcID === null || dragSrcID === t.id) return;
-        moveTask(dragSrcID, t.id);
-      });
+      if (draggable) {
+        li.addEventListener("dragstart", (e) => {
+          dragSrcID = t.id;
+          li.classList.add("dragging");
+          e.dataTransfer.effectAllowed = "move";
+        });
+        li.addEventListener("dragend", () => {
+          dragSrcID = null;
+          li.classList.remove("dragging");
+          document.querySelectorAll("li.drop-target").forEach((el) => el.classList.remove("drop-target"));
+        });
+        li.addEventListener("dragover", (e) => {
+          if (dragSrcID === null || dragSrcID === t.id) return;
+          e.preventDefault();
+          li.classList.add("drop-target");
+        });
+        li.addEventListener("dragleave", () => li.classList.remove("drop-target"));
+        li.addEventListener("drop", (e) => {
+          e.preventDefault();
+          li.classList.remove("drop-target");
+          if (dragSrcID === null || dragSrcID === t.id) return;
+          moveTask(dragSrcID, t.id);
+        });
+      }
 
       return li;
     }
 
-    function startEdit(li, t) {
+    function startTitleEdit(li, t) {
       if (li.querySelector(".edit")) return;
       const input = document.createElement("input");
       input.type = "text";
@@ -263,6 +328,49 @@
       input.addEventListener("blur", () => commit(true));
     }
 
+    function startDueEdit(li, t) {
+      if (li.querySelector(".due-edit")) return;
+      const input = document.createElement("input");
+      input.type = "date";
+      input.className = "due due-edit";
+      input.value = t.due_date || "";
+
+      const dueEl = li.querySelector(".due");
+      dueEl.replaceWith(input);
+      input.focus();
+      if (typeof input.showPicker === "function") input.showPicker();
+
+      let settled = false;
+      const commit = async (save) => {
+        if (settled) return;
+        settled = true;
+        if (save) {
+          const next = input.value || "";
+          if (next !== (t.due_date || "")) {
+            await setDue(t.id, next);
+            return;
+          }
+        }
+        refresh();
+      };
+
+      input.addEventListener("change", () => commit(true));
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") { e.preventDefault(); commit(false); }
+        if (e.key === "Enter") { e.preventDefault(); commit(true); }
+      });
+      input.addEventListener("blur", () => commit(true));
+    }
+
+    async function setDue(id, date) {
+      await fetch(`/api/tasks/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ due_date: date }),
+      });
+      refresh();
+    }
+
     async function toggleDone(id, done) {
       await fetch(`/api/tasks/${id}`, {
         method: "PATCH",
@@ -278,7 +386,6 @@
     }
 
     async function moveTask(srcID, targetID) {
-      if (currentFilter !== "all") return;
       const ids = currentTasks.map((t) => t.id);
       const from = ids.indexOf(srcID);
       const to = ids.indexOf(targetID);
@@ -293,11 +400,13 @@
       refresh();
     }
 
-    filtersEl.addEventListener("click", (e) => {
-      const btn = e.target.closest("button[data-filter]");
+    toolbarEl.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-filter], button[data-sort]");
       if (!btn) return;
-      filtersEl.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === btn));
-      currentFilter = btn.dataset.filter;
+      const group = btn.parentElement;
+      group.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === btn));
+      if (btn.dataset.filter) currentFilter = btn.dataset.filter;
+      if (btn.dataset.sort) currentSort = btn.dataset.sort;
       refresh();
     });
 
@@ -305,12 +414,15 @@
       e.preventDefault();
       const title = titleInput.value.trim();
       if (!title) return;
+      const body = { title };
+      if (dueInput.value) body.due_date = dueInput.value;
       await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title }),
+        body: JSON.stringify(body),
       });
       titleInput.value = "";
+      dueInput.value = "";
       refresh();
     });
 

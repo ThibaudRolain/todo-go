@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
+	"time"
 )
 
 type Task struct {
-	ID    int    `json:"id"`
-	Title string `json:"title"`
-	Done  bool   `json:"done"`
+	ID      int    `json:"id"`
+	Title   string `json:"title"`
+	Done    bool   `json:"done"`
+	DueDate string `json:"due_date,omitempty"` // YYYY-MM-DD, empty = none
 }
 
 type Store struct {
@@ -22,12 +25,32 @@ type Store struct {
 	Tasks  []Task `json:"tasks"`
 }
 
+const DateFormat = "2006-01-02"
+
 var (
-	ErrNotFound      = errors.New("task not found")
-	ErrEmptyTitle    = errors.New("title must not be empty")
-	ErrReorderLength = errors.New("reorder ids must match existing tasks")
+	ErrNotFound       = errors.New("task not found")
+	ErrEmptyTitle     = errors.New("title must not be empty")
+	ErrReorderLength  = errors.New("reorder ids must match existing tasks")
 	ErrReorderUnknown = errors.New("reorder contains unknown id")
+	ErrBadDueDate     = errors.New("due date must be YYYY-MM-DD")
 )
+
+type SortMode string
+
+const (
+	SortManual SortMode = "manual"
+	SortByDue  SortMode = "due"
+)
+
+func validateDueDate(s string) error {
+	if s == "" {
+		return nil
+	}
+	if _, err := time.Parse(DateFormat, s); err != nil {
+		return ErrBadDueDate
+	}
+	return nil
+}
 
 func defaultStorePath() (string, error) {
 	if p := os.Getenv("TODO_GO_DATA"); p != "" {
@@ -87,13 +110,16 @@ func (s *Store) List() []Task {
 	return out
 }
 
-func (s *Store) Add(title string) (Task, error) {
+func (s *Store) Add(title, dueDate string) (Task, error) {
 	if title == "" {
 		return Task{}, ErrEmptyTitle
 	}
+	if err := validateDueDate(dueDate); err != nil {
+		return Task{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	t := Task{ID: s.NextID, Title: title}
+	t := Task{ID: s.NextID, Title: title, DueDate: dueDate}
 	s.NextID++
 	s.Tasks = append(s.Tasks, t)
 	if err := s.save(); err != nil {
@@ -126,6 +152,24 @@ func (s *Store) SetTitle(id int, title string) (Task, error) {
 	for i := range s.Tasks {
 		if s.Tasks[i].ID == id {
 			s.Tasks[i].Title = title
+			if err := s.save(); err != nil {
+				return Task{}, err
+			}
+			return s.Tasks[i], nil
+		}
+	}
+	return Task{}, ErrNotFound
+}
+
+func (s *Store) SetDue(id int, dueDate string) (Task, error) {
+	if err := validateDueDate(dueDate); err != nil {
+		return Task{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.Tasks {
+		if s.Tasks[i].ID == id {
+			s.Tasks[i].DueDate = dueDate
 			if err := s.save(); err != nil {
 				return Task{}, err
 			}
@@ -169,4 +213,40 @@ func (s *Store) Reorder(ids []int) error {
 	}
 	s.Tasks = reordered
 	return s.save()
+}
+
+// SortTasks sorts a slice in place according to the given mode.
+// SortByDue: pending-with-due (earliest first) → pending-no-due → done.
+// SortManual: no-op (keeps insertion order).
+func SortTasks(tasks []Task, mode SortMode) {
+	if mode != SortByDue {
+		return
+	}
+	sort.SliceStable(tasks, func(i, j int) bool {
+		a, b := tasks[i], tasks[j]
+		if a.Done != b.Done {
+			return !a.Done
+		}
+		aHas, bHas := a.DueDate != "", b.DueDate != ""
+		if aHas != bHas {
+			return aHas
+		}
+		if aHas && a.DueDate != b.DueDate {
+			return a.DueDate < b.DueDate
+		}
+		return a.ID < b.ID
+	})
+}
+
+// IsOverdue returns true if the task has a past due date and is not done.
+func IsOverdue(t Task, today time.Time) bool {
+	if t.Done || t.DueDate == "" {
+		return false
+	}
+	due, err := time.Parse(DateFormat, t.DueDate)
+	if err != nil {
+		return false
+	}
+	todayStart := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, today.Location())
+	return due.Before(todayStart)
 }
