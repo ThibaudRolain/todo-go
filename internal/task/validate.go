@@ -48,3 +48,4 @@ func validateLabel(label string) (string, error) {
 	}
 	return normalized[0], nil
 }
+

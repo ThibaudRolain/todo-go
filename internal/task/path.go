@@ -1,6 +1,7 @@
 package task
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -39,20 +40,17 @@ func MigrateLegacy(targetUser string) (bool, error) {
 		return false, err
 	}
 	legacy := filepath.Join(base, "tasks.json")
-	if _, err := os.Stat(legacy); err != nil {
-		return false, nil
-	}
 	newPath, err := UserStorePath(targetUser)
 	if err != nil {
 		return false, err
-	}
-	if _, err := os.Stat(newPath); err == nil {
-		return false, nil
 	}
 	if err := os.MkdirAll(filepath.Dir(newPath), 0o755); err != nil {
 		return false, err
 	}
 	if err := os.Rename(legacy, newPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrExist) {
+			return false, nil
+		}
 		return false, err
 	}
 	return true, nil

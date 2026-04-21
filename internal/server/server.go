@@ -42,12 +42,14 @@ func Run(deps Deps, addr string) error {
 		return err
 	}
 	staticFS := http.FileServer(http.FS(webRoot))
+
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		serveStaticPage(w, r, webRoot, "login.html")
+	})
+	mux.HandleFunc("/register", func(w http.ResponseWriter, r *http.Request) {
+		serveStaticPage(w, r, webRoot, "register.html")
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/login", "/register":
-			serveStaticPage(w, r, webRoot, r.URL.Path+".html")
-			return
-		}
 		if deps.Sessions.UserFromRequest(r) == "" {
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return

@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"todo-go/internal/server"
 	"todo-go/internal/session"
@@ -25,8 +26,7 @@ func NewRootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&username, "user", "", `which user's tasks to act on (env: TODO_GO_USER; default: "default")`)
 
 	open := func() (*task.Store, error) {
-		u := resolveUser(username)
-		return task.OpenForUser(u)
+		return task.OpenForUser(envOrDefault(username, "TODO_GO_USER", "default"))
 	}
 
 	root.AddCommand(
@@ -49,14 +49,38 @@ func NewRootCmd() *cobra.Command {
 	return root
 }
 
-func resolveUser(flagValue string) string {
+func envOrDefault(flagValue, envVar, fallback string) string {
 	if flagValue != "" {
 		return flagValue
 	}
-	if env := os.Getenv("TODO_GO_USER"); env != "" {
-		return env
+	if v := os.Getenv(envVar); v != "" {
+		return v
 	}
-	return "default"
+	return fallback
+}
+
+func parseID(arg string) (int, error) {
+	id, err := strconv.Atoi(arg)
+	if err != nil {
+		return 0, fmt.Errorf("invalid id %q", arg)
+	}
+	return id, nil
+}
+
+func withStore(open storeOpener, fn func(*task.Store) error) error {
+	store, err := open()
+	if err != nil {
+		return err
+	}
+	return fn(store)
+}
+
+func withStoreAndID(open storeOpener, arg string, fn func(*task.Store, int) error) error {
+	id, err := parseID(arg)
+	if err != nil {
+		return err
+	}
+	return withStore(open, func(s *task.Store) error { return fn(s, id) })
 }
 
 func newServeCmd() *cobra.Command {
@@ -65,8 +89,8 @@ func newServeCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Start the HTTP server and web UI",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if envAddr := os.Getenv("TODO_GO_ADDR"); envAddr != "" && !cmd.Flags().Changed("addr") {
-				addr = envAddr
+			if !cmd.Flags().Changed("addr") {
+				addr = envOrDefault("", "TODO_GO_ADDR", addr)
 			}
 			users, err := user.Open("")
 			if err != nil {

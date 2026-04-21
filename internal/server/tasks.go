@@ -18,6 +18,9 @@ type TaskView struct {
 	Public bool   `json:"public"`
 }
 
+func (v TaskView) GetDone() bool       { return v.Done }
+func (v TaskView) GetLabels() []string { return v.Labels }
+
 func aggregatedTasks(deps Deps, currentUser string) ([]TaskView, error) {
 	out := []TaskView{}
 
@@ -25,19 +28,8 @@ func aggregatedTasks(deps Deps, currentUser string) ([]TaskView, error) {
 	if err != nil {
 		return nil, err
 	}
-	myPublic := make(map[string]bool)
-	for _, l := range me.GetPublicLabels() {
-		myPublic[l] = true
-	}
 	for _, t := range me.List() {
-		isPublic := false
-		for _, l := range t.Labels {
-			if myPublic[l] {
-				isPublic = true
-				break
-			}
-		}
-		out = append(out, TaskView{Task: t, Owner: currentUser, Public: isPublic})
+		out = append(out, TaskView{Task: t, Owner: currentUser, Public: me.HasAnyPublicLabel(t)})
 	}
 
 	for _, other := range deps.Users.Usernames() {
@@ -48,22 +40,11 @@ func aggregatedTasks(deps Deps, currentUser string) ([]TaskView, error) {
 		if err != nil {
 			continue
 		}
-		otherPublic := make(map[string]bool)
-		for _, l := range s.GetPublicLabels() {
-			otherPublic[l] = true
-		}
-		if len(otherPublic) == 0 {
+		if !s.HasPublicLabels() {
 			continue
 		}
 		for _, t := range s.List() {
-			shared := false
-			for _, l := range t.Labels {
-				if otherPublic[l] {
-					shared = true
-					break
-				}
-			}
-			if shared {
+			if s.HasAnyPublicLabel(t) {
 				out = append(out, TaskView{Task: t, Owner: other, Public: true})
 			}
 		}
@@ -71,32 +52,12 @@ func aggregatedTasks(deps Deps, currentUser string) ([]TaskView, error) {
 	return out, nil
 }
 
-func filterViewsByDone(views []TaskView, done bool) []TaskView {
-	out := views[:0:0]
-	for _, v := range views {
-		if v.Done == done {
-			out = append(out, v)
-		}
-	}
-	return out
-}
-
-func filterViewsByLabel(views []TaskView, label string) []TaskView {
-	out := views[:0:0]
-	for _, v := range views {
-		if task.HasLabel(v.Task, label) {
-			out = append(out, v)
-		}
-	}
-	return out
-}
-
 func sortViews(views []TaskView, mode task.SortMode) {
 	if mode != task.SortByDue {
 		return
 	}
 	sort.SliceStable(views, func(i, j int) bool {
-		a, b := views[i], views[j]
+		a, b := views[i].Task, views[j].Task
 		if a.Done != b.Done {
 			return !a.Done
 		}
@@ -107,8 +68,8 @@ func sortViews(views []TaskView, mode task.SortMode) {
 		if aHas && a.DueDate != b.DueDate {
 			return a.DueDate < b.DueDate
 		}
-		if a.Owner != b.Owner {
-			return a.Owner < b.Owner
+		if views[i].Owner != views[j].Owner {
+			return views[i].Owner < views[j].Owner
 		}
 		return a.ID < b.ID
 	})
@@ -120,32 +81,29 @@ func tasksHandler(deps Deps) http.HandlerFunc {
 
 		switch r.Method {
 		case http.MethodGet:
+			status, err := task.ParseStatus(r.URL.Query().Get("status"))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			mode, err := task.ParseSortMode(r.URL.Query().Get("sort"))
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 			views, err := aggregatedTasks(deps, current)
 			if err != nil {
 				http.Error(w, "failed to aggregate tasks", http.StatusInternalServerError)
 				return
 			}
-			switch r.URL.Query().Get("status") {
-			case "pending":
-				views = filterViewsByDone(views, false)
-			case "done":
-				views = filterViewsByDone(views, true)
-			case "", "all":
-			default:
-				http.Error(w, "invalid status; want one of: pending, done, all", http.StatusBadRequest)
-				return
+			switch status {
+			case task.StatusPending:
+				views = task.FilterByDone(views, false)
+			case task.StatusDone:
+				views = task.FilterByDone(views, true)
 			}
 			if label := r.URL.Query().Get("label"); label != "" {
-				views = filterViewsByLabel(views, label)
-			}
-			sortParam := r.URL.Query().Get("sort")
-			if sortParam == "" {
-				sortParam = string(task.SortByDue)
-			}
-			mode := task.SortMode(sortParam)
-			if mode != task.SortManual && mode != task.SortByDue {
-				http.Error(w, "invalid sort; want one of: due, manual", http.StatusBadRequest)
-				return
+				views = task.FilterByLabel(views, label)
 			}
 			sortViews(views, mode)
 			writeJSON(w, http.StatusOK, views)
@@ -215,39 +173,15 @@ func taskByIDHandler(mgr *task.Manager) http.HandlerFunc {
 				http.Error(w, "no fields to update", http.StatusBadRequest)
 				return
 			}
-			var updated task.Task
-			if body.Title != nil {
-				title := strings.TrimSpace(*body.Title)
-				if title == "" {
-					http.Error(w, "title must not be empty", http.StatusBadRequest)
-					return
-				}
-				updated, err = store.SetTitle(id, title)
-				if err != nil {
-					writeStoreErr(w, err)
-					return
-				}
-			}
-			if body.DueDate != nil {
-				updated, err = store.SetDue(id, strings.TrimSpace(*body.DueDate))
-				if err != nil {
-					writeStoreErr(w, err)
-					return
-				}
-			}
-			if body.Labels != nil {
-				updated, err = store.SetLabels(id, *body.Labels)
-				if err != nil {
-					writeStoreErr(w, err)
-					return
-				}
-			}
-			if body.Done != nil {
-				updated, err = store.SetDone(id, *body.Done)
-				if err != nil {
-					writeStoreErr(w, err)
-					return
-				}
+			updated, err := store.Update(id, task.Patch{
+				Title:   body.Title,
+				DueDate: body.DueDate,
+				Labels:  body.Labels,
+				Done:    body.Done,
+			})
+			if err != nil {
+				writeStoreErr(w, err)
+				return
 			}
 			writeJSON(w, http.StatusOK, TaskView{Task: updated, Owner: current, Public: store.HasAnyPublicLabel(updated)})
 

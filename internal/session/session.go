@@ -10,6 +10,7 @@ import (
 )
 
 const CookieName = "tg_session"
+const TTL = 7 * 24 * time.Hour
 
 type entry struct {
 	username string
@@ -42,6 +43,10 @@ func (m *Manager) Get(token string) string {
 	defer m.mu.Unlock()
 	e, ok := m.sessions[token]
 	if !ok {
+		return ""
+	}
+	if time.Since(e.created) > TTL {
+		delete(m.sessions, token)
 		return ""
 	}
 	return e.username
@@ -81,6 +86,7 @@ func SetCookie(w http.ResponseWriter, token string) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
+		MaxAge:   int(TTL.Seconds()),
 	})
 }
 

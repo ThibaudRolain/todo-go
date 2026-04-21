@@ -18,10 +18,8 @@ func labelsHandler(deps Deps) http.HandlerFunc {
 		current := session.UsernameFromRequest(r)
 		seen := map[string]bool{}
 		if me, err := deps.Stores.ForUser(current); err == nil {
-			for _, t := range me.List() {
-				for _, l := range t.Labels {
-					seen[l] = true
-				}
+			for _, l := range me.Labels() {
+				seen[l] = true
 			}
 		}
 		for _, other := range deps.Users.Usernames() {
@@ -29,15 +27,11 @@ func labelsHandler(deps Deps) http.HandlerFunc {
 				continue
 			}
 			s, err := deps.Stores.ForUser(other)
-			if err != nil {
+			if err != nil || !s.HasPublicLabels() {
 				continue
 			}
-			for _, t := range s.List() {
-				for _, l := range t.Labels {
-					if s.IsPublic(l) {
-						seen[l] = true
-					}
-				}
+			for _, l := range s.GetPublicLabels() {
+				seen[l] = true
 			}
 		}
 		labels := make([]string, 0, len(seen))

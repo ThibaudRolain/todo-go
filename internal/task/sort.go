@@ -6,23 +6,26 @@ import (
 	"time"
 )
 
+func TaskLess(a, b Task) bool {
+	if a.Done != b.Done {
+		return !a.Done
+	}
+	aHas, bHas := a.DueDate != "", b.DueDate != ""
+	if aHas != bHas {
+		return aHas
+	}
+	if aHas && a.DueDate != b.DueDate {
+		return a.DueDate < b.DueDate
+	}
+	return a.ID < b.ID
+}
+
 func SortTasks(tasks []Task, mode SortMode) {
 	if mode != SortByDue {
 		return
 	}
 	sort.SliceStable(tasks, func(i, j int) bool {
-		a, b := tasks[i], tasks[j]
-		if a.Done != b.Done {
-			return !a.Done
-		}
-		aHas, bHas := a.DueDate != "", b.DueDate != ""
-		if aHas != bHas {
-			return aHas
-		}
-		if aHas && a.DueDate != b.DueDate {
-			return a.DueDate < b.DueDate
-		}
-		return a.ID < b.ID
+		return TaskLess(tasks[i], tasks[j])
 	})
 }
 

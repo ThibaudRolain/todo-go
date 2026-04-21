@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -14,16 +15,56 @@ import (
 type Store struct {
 	mu           sync.Mutex
 	path         string
+	nextID       int
+	tasks        []Task
+	publicLabels []string
+	publicSet    map[string]bool
+}
+
+type storeJSON struct {
 	NextID       int      `json:"next_id"`
 	Tasks        []Task   `json:"tasks"`
 	PublicLabels []string `json:"public_labels,omitempty"`
+}
+
+func (s *Store) MarshalJSON() ([]byte, error) {
+	return json.Marshal(storeJSON{
+		NextID:       s.nextID,
+		Tasks:        s.tasks,
+		PublicLabels: s.publicLabels,
+	})
+}
+
+func (s *Store) UnmarshalJSON(data []byte) error {
+	var x storeJSON
+	if err := json.Unmarshal(data, &x); err != nil {
+		return err
+	}
+	s.nextID = x.NextID
+	s.tasks = x.Tasks
+	s.publicLabels = x.PublicLabels
+	if s.nextID == 0 {
+		s.nextID = 1
+	}
+	if s.tasks == nil {
+		s.tasks = []Task{}
+	}
+	s.rebuildPublicSet()
+	return nil
+}
+
+func (s *Store) rebuildPublicSet() {
+	s.publicSet = make(map[string]bool, len(s.publicLabels))
+	for _, l := range s.publicLabels {
+		s.publicSet[l] = true
+	}
 }
 
 func OpenStore(path string) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("OpenStore: empty path")
 	}
-	s := &Store{path: path, NextID: 1, Tasks: []Task{}}
+	s := &Store{path: path, nextID: 1, tasks: []Task{}, publicSet: map[string]bool{}}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -33,12 +74,6 @@ func OpenStore(path string) (*Store, error) {
 	}
 	if err := json.Unmarshal(data, s); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
-	}
-	if s.NextID == 0 {
-		s.NextID = 1
-	}
-	if s.Tasks == nil {
-		s.Tasks = []Task{}
 	}
 	return s, nil
 }
@@ -57,16 +92,14 @@ func (s *Store) save() error {
 func (s *Store) List() []Task {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]Task, len(s.Tasks))
-	copy(out, s.Tasks)
-	return out
+	return slices.Clone(s.tasks)
 }
 
 func (s *Store) Labels() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	seen := make(map[string]bool)
-	for _, t := range s.Tasks {
+	for _, t := range s.tasks {
 		for _, l := range t.Labels {
 			seen[l] = true
 		}
@@ -93,28 +126,37 @@ func (s *Store) Add(n NewTask) (Task, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	t := Task{ID: s.NextID, Title: title, DueDate: n.DueDate, Labels: labels}
-	s.NextID++
-	s.Tasks = append(s.Tasks, t)
+	t := Task{ID: s.nextID, Title: title, DueDate: n.DueDate, Labels: labels}
+	s.nextID++
+	s.tasks = append(s.tasks, t)
 	if err := s.save(); err != nil {
 		return Task{}, err
 	}
 	return t, nil
 }
 
-func (s *Store) SetDone(id int, done bool) (Task, error) {
+func (s *Store) mutate(id int, fn func(*Task) error) (Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i := range s.Tasks {
-		if s.Tasks[i].ID == id {
-			s.Tasks[i].Done = done
+	for i := range s.tasks {
+		if s.tasks[i].ID == id {
+			if err := fn(&s.tasks[i]); err != nil {
+				return Task{}, err
+			}
 			if err := s.save(); err != nil {
 				return Task{}, err
 			}
-			return s.Tasks[i], nil
+			return s.tasks[i], nil
 		}
 	}
 	return Task{}, ErrNotFound
+}
+
+func (s *Store) SetDone(id int, done bool) (Task, error) {
+	return s.mutate(id, func(t *Task) error {
+		t.Done = done
+		return nil
+	})
 }
 
 func (s *Store) SetTitle(id int, title string) (Task, error) {
@@ -122,36 +164,20 @@ func (s *Store) SetTitle(id int, title string) (Task, error) {
 	if title == "" {
 		return Task{}, ErrEmptyTitle
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.Tasks {
-		if s.Tasks[i].ID == id {
-			s.Tasks[i].Title = title
-			if err := s.save(); err != nil {
-				return Task{}, err
-			}
-			return s.Tasks[i], nil
-		}
-	}
-	return Task{}, ErrNotFound
+	return s.mutate(id, func(t *Task) error {
+		t.Title = title
+		return nil
+	})
 }
 
 func (s *Store) SetDue(id int, dueDate string) (Task, error) {
 	if err := validateDueDate(dueDate); err != nil {
 		return Task{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.Tasks {
-		if s.Tasks[i].ID == id {
-			s.Tasks[i].DueDate = dueDate
-			if err := s.save(); err != nil {
-				return Task{}, err
-			}
-			return s.Tasks[i], nil
-		}
-	}
-	return Task{}, ErrNotFound
+	return s.mutate(id, func(t *Task) error {
+		t.DueDate = dueDate
+		return nil
+	})
 }
 
 func (s *Store) SetLabels(id int, labels []string) (Task, error) {
@@ -159,18 +185,10 @@ func (s *Store) SetLabels(id int, labels []string) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.Tasks {
-		if s.Tasks[i].ID == id {
-			s.Tasks[i].Labels = normalized
-			if err := s.save(); err != nil {
-				return Task{}, err
-			}
-			return s.Tasks[i], nil
-		}
-	}
-	return Task{}, ErrNotFound
+	return s.mutate(id, func(t *Task) error {
+		t.Labels = normalized
+		return nil
+	})
 }
 
 func (s *Store) AddLabel(id int, label string) (Task, error) {
@@ -178,24 +196,15 @@ func (s *Store) AddLabel(id int, label string) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.Tasks {
-		if s.Tasks[i].ID != id {
-			continue
-		}
-		for _, existing := range s.Tasks[i].Labels {
+	return s.mutate(id, func(t *Task) error {
+		for _, existing := range t.Labels {
 			if existing == l {
-				return s.Tasks[i], nil
+				return nil
 			}
 		}
-		s.Tasks[i].Labels = append(s.Tasks[i].Labels, l)
-		if err := s.save(); err != nil {
-			return Task{}, err
-		}
-		return s.Tasks[i], nil
-	}
-	return Task{}, ErrNotFound
+		t.Labels = append(t.Labels, l)
+		return nil
+	})
 }
 
 func (s *Store) RemoveLabel(id int, label string) (Task, error) {
@@ -203,33 +212,66 @@ func (s *Store) RemoveLabel(id int, label string) (Task, error) {
 	if err != nil {
 		return Task{}, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.Tasks {
-		if s.Tasks[i].ID != id {
-			continue
-		}
-		kept := s.Tasks[i].Labels[:0]
-		for _, existing := range s.Tasks[i].Labels {
+	return s.mutate(id, func(t *Task) error {
+		kept := make([]string, 0, len(t.Labels))
+		for _, existing := range t.Labels {
 			if existing != l {
 				kept = append(kept, existing)
 			}
 		}
-		s.Tasks[i].Labels = kept
-		if err := s.save(); err != nil {
+		t.Labels = kept
+		return nil
+	})
+}
+
+func (s *Store) Update(id int, p Patch) (Task, error) {
+	var normalizedLabels []string
+	var trimmedTitle string
+	var trimmedDue string
+
+	if p.Title != nil {
+		trimmedTitle = strings.TrimSpace(*p.Title)
+		if trimmedTitle == "" {
+			return Task{}, ErrEmptyTitle
+		}
+	}
+	if p.DueDate != nil {
+		trimmedDue = strings.TrimSpace(*p.DueDate)
+		if err := validateDueDate(trimmedDue); err != nil {
 			return Task{}, err
 		}
-		return s.Tasks[i], nil
 	}
-	return Task{}, ErrNotFound
+	if p.Labels != nil {
+		var err error
+		normalizedLabels, err = normalizeLabels(*p.Labels)
+		if err != nil {
+			return Task{}, err
+		}
+	}
+
+	return s.mutate(id, func(t *Task) error {
+		if p.Title != nil {
+			t.Title = trimmedTitle
+		}
+		if p.DueDate != nil {
+			t.DueDate = trimmedDue
+		}
+		if p.Labels != nil {
+			t.Labels = normalizedLabels
+		}
+		if p.Done != nil {
+			t.Done = *p.Done
+		}
+		return nil
+	})
 }
 
 func (s *Store) Remove(id int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i, t := range s.Tasks {
+	for i, t := range s.tasks {
 		if t.ID == id {
-			s.Tasks = append(s.Tasks[:i:i], s.Tasks[i+1:]...)
+			s.tasks = slices.Delete(s.tasks, i, i+1)
 			return s.save()
 		}
 	}
@@ -239,11 +281,11 @@ func (s *Store) Remove(id int) error {
 func (s *Store) Reorder(ids []int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(ids) != len(s.Tasks) {
+	if len(ids) != len(s.tasks) {
 		return ErrReorderLength
 	}
-	byID := make(map[int]Task, len(s.Tasks))
-	for _, t := range s.Tasks {
+	byID := make(map[int]Task, len(s.tasks))
+	for _, t := range s.tasks {
 		byID[t.ID] = t
 	}
 	reordered := make([]Task, 0, len(ids))
@@ -256,28 +298,40 @@ func (s *Store) Reorder(ids []int) error {
 		seen[id] = true
 		reordered = append(reordered, t)
 	}
-	s.Tasks = reordered
+	s.tasks = reordered
 	return s.save()
 }
 
 func (s *Store) GetPublicLabels() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]string, len(s.PublicLabels))
-	copy(out, s.PublicLabels)
-	return out
+	return slices.Clone(s.publicLabels)
 }
 
 func (s *Store) IsPublic(label string) bool {
 	label = strings.ToLower(strings.TrimSpace(label))
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, l := range s.PublicLabels {
-		if l == label {
-			return true
-		}
+	return s.publicSet[label]
+}
+
+func (s *Store) HasPublicLabels() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.publicLabels) > 0
+}
+
+func (s *Store) mutatePublicLabels(fn func() error) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := fn(); err != nil {
+		return nil, err
 	}
-	return false
+	s.rebuildPublicSet()
+	if err := s.save(); err != nil {
+		return nil, err
+	}
+	return slices.Clone(s.publicLabels), nil
 }
 
 func (s *Store) SetPublicLabels(labels []string) ([]string, error) {
@@ -285,15 +339,10 @@ func (s *Store) SetPublicLabels(labels []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.PublicLabels = normalized
-	if err := s.save(); err != nil {
-		return nil, err
-	}
-	out := make([]string, len(s.PublicLabels))
-	copy(out, s.PublicLabels)
-	return out, nil
+	return s.mutatePublicLabels(func() error {
+		s.publicLabels = normalized
+		return nil
+	})
 }
 
 func (s *Store) AddPublicLabel(label string) ([]string, error) {
@@ -301,22 +350,15 @@ func (s *Store) AddPublicLabel(label string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, existing := range s.PublicLabels {
-		if existing == l {
-			out := make([]string, len(s.PublicLabels))
-			copy(out, s.PublicLabels)
-			return out, nil
+	return s.mutatePublicLabels(func() error {
+		for _, existing := range s.publicLabels {
+			if existing == l {
+				return nil
+			}
 		}
-	}
-	s.PublicLabels = append(s.PublicLabels, l)
-	if err := s.save(); err != nil {
-		return nil, err
-	}
-	out := make([]string, len(s.PublicLabels))
-	copy(out, s.PublicLabels)
-	return out, nil
+		s.publicLabels = append(s.publicLabels, l)
+		return nil
+	})
 }
 
 func (s *Store) RemovePublicLabel(label string) ([]string, error) {
@@ -324,35 +366,26 @@ func (s *Store) RemovePublicLabel(label string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	kept := s.PublicLabels[:0]
-	for _, existing := range s.PublicLabels {
-		if existing != l {
-			kept = append(kept, existing)
+	return s.mutatePublicLabels(func() error {
+		kept := make([]string, 0, len(s.publicLabels))
+		for _, existing := range s.publicLabels {
+			if existing != l {
+				kept = append(kept, existing)
+			}
 		}
-	}
-	s.PublicLabels = kept
-	if err := s.save(); err != nil {
-		return nil, err
-	}
-	out := make([]string, len(s.PublicLabels))
-	copy(out, s.PublicLabels)
-	return out, nil
+		s.publicLabels = kept
+		return nil
+	})
 }
 
 func (s *Store) HasAnyPublicLabel(t Task) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.PublicLabels) == 0 || len(t.Labels) == 0 {
+	if len(s.publicSet) == 0 {
 		return false
 	}
-	public := make(map[string]bool, len(s.PublicLabels))
-	for _, l := range s.PublicLabels {
-		public[l] = true
-	}
 	for _, l := range t.Labels {
-		if public[l] {
+		if s.publicSet[l] {
 			return true
 		}
 	}
