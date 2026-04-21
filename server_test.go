@@ -19,12 +19,11 @@ func newTestServer(t *testing.T) (*Store, http.Handler) {
 	return s, buildMux(s)
 }
 
-// buildMux mirrors runServer's routing without actually listening on a port.
-// Kept in the _test file so we don't alter production code just for tests.
 func buildMux(store *Store) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/tasks", apiTasksHandler(store))
 	mux.HandleFunc("/api/tasks/", apiTaskByIDHandler(store))
+	mux.HandleFunc("/api/reorder", apiReorderHandler(store))
 	return mux
 }
 
@@ -74,6 +73,35 @@ func TestAPI_AddAndList(t *testing.T) {
 	}
 }
 
+func TestAPI_ListStatusFilter(t *testing.T) {
+	s, h := newTestServer(t)
+	s.Add("a")
+	s.Add("b")
+	s.SetDone(1, true)
+
+	assertListLen := func(path string, want int) {
+		t.Helper()
+		rec := doJSON(t, h, http.MethodGet, path, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: want 200, got %d", path, rec.Code)
+		}
+		var tasks []Task
+		_ = json.Unmarshal(rec.Body.Bytes(), &tasks)
+		if len(tasks) != want {
+			t.Fatalf("GET %s: want %d tasks, got %d", path, want, len(tasks))
+		}
+	}
+	assertListLen("/api/tasks", 2)
+	assertListLen("/api/tasks?status=all", 2)
+	assertListLen("/api/tasks?status=pending", 1)
+	assertListLen("/api/tasks?status=done", 1)
+
+	rec := doJSON(t, h, http.MethodGet, "/api/tasks?status=bogus", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for bogus status, got %d", rec.Code)
+	}
+}
+
 func TestAPI_AddRejectsEmptyTitle(t *testing.T) {
 	_, h := newTestServer(t)
 	rec := doJSON(t, h, http.MethodPost, "/api/tasks", map[string]string{"title": "   "})
@@ -97,6 +125,41 @@ func TestAPI_PatchMarksDone(t *testing.T) {
 	}
 	if !updated.Done {
 		t.Fatalf("want Done=true, got %+v", updated)
+	}
+}
+
+func TestAPI_PatchEditsTitle(t *testing.T) {
+	s, h := newTestServer(t)
+	s.Add("old")
+
+	rec := doJSON(t, h, http.MethodPatch, "/api/tasks/1", map[string]any{"title": "new"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+	var updated Task
+	_ = json.Unmarshal(rec.Body.Bytes(), &updated)
+	if updated.Title != "new" {
+		t.Fatalf("want title 'new', got %q", updated.Title)
+	}
+}
+
+func TestAPI_PatchRejectsEmptyTitle(t *testing.T) {
+	s, h := newTestServer(t)
+	s.Add("old")
+
+	rec := doJSON(t, h, http.MethodPatch, "/api/tasks/1", map[string]any{"title": "   "})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for empty title, got %d", rec.Code)
+	}
+}
+
+func TestAPI_PatchRejectsNoFields(t *testing.T) {
+	s, h := newTestServer(t)
+	s.Add("a")
+
+	rec := doJSON(t, h, http.MethodPatch, "/api/tasks/1", map[string]any{})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for empty patch body, got %d", rec.Code)
 	}
 }
 
@@ -139,5 +202,34 @@ func TestAPI_MethodNotAllowed(t *testing.T) {
 	rec := doJSON(t, h, http.MethodPut, "/api/tasks", nil)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("want 405, got %d", rec.Code)
+	}
+}
+
+func TestAPI_Reorder(t *testing.T) {
+	s, h := newTestServer(t)
+	s.Add("a")
+	s.Add("b")
+	s.Add("c")
+
+	rec := doJSON(t, h, http.MethodPost, "/api/reorder", map[string]any{"ids": []int{3, 1, 2}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+
+	var tasks []Task
+	_ = json.Unmarshal(rec.Body.Bytes(), &tasks)
+	if len(tasks) != 3 || tasks[0].ID != 3 || tasks[1].ID != 1 || tasks[2].ID != 2 {
+		t.Fatalf("unexpected reordered list: %+v", tasks)
+	}
+}
+
+func TestAPI_ReorderBadIDs(t *testing.T) {
+	s, h := newTestServer(t)
+	s.Add("a")
+	s.Add("b")
+
+	rec := doJSON(t, h, http.MethodPost, "/api/reorder", map[string]any{"ids": []int{1, 99}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d", rec.Code)
 	}
 }
