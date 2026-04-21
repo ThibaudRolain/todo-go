@@ -30,6 +30,9 @@ var (
 )
 
 func defaultStorePath() (string, error) {
+	if p := os.Getenv("TODO_GO_DATA"); p != "" {
+		return p, nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err

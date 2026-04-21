@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/spf13/cobra"
@@ -162,10 +163,13 @@ func newServeCmd(store *Store) *cobra.Command {
 		Use:   "serve",
 		Short: "Start the HTTP server and web UI",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if envAddr := os.Getenv("TODO_GO_ADDR"); envAddr != "" && !cmd.Flags().Changed("addr") {
+				addr = envAddr
+			}
 			return runServer(store, addr)
 		},
 	}
-	cmd.Flags().StringVar(&addr, "addr", "localhost:8080", "address to listen on")
+	cmd.Flags().StringVar(&addr, "addr", "localhost:8080", "address to listen on (env: TODO_GO_ADDR)")
 	return cmd
 }
 
