@@ -50,9 +50,11 @@ func Run(deps Deps, addr string) error {
 		serveStaticPage(w, r, webRoot, "register.html")
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if deps.Sessions.UserFromRequest(r) == "" {
-			http.Redirect(w, r, "/login", http.StatusFound)
-			return
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
+			if deps.Sessions.UserFromRequest(r) == "" {
+				http.Redirect(w, r, "/login", http.StatusFound)
+				return
+			}
 		}
 		staticFS.ServeHTTP(w, r)
 	})
