@@ -1,0 +1,6 @@
+/todo-go
+/todo-go.exe
+*.exe
+
+.vscode/
+.idea/
