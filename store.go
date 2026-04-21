@@ -7,15 +7,17 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
 
 type Task struct {
-	ID      int    `json:"id"`
-	Title   string `json:"title"`
-	Done    bool   `json:"done"`
-	DueDate string `json:"due_date,omitempty"` // YYYY-MM-DD, empty = none
+	ID      int      `json:"id"`
+	Title   string   `json:"title"`
+	Done    bool     `json:"done"`
+	DueDate string   `json:"due_date,omitempty"` // YYYY-MM-DD, empty = none
+	Labels  []string `json:"labels,omitempty"`
 }
 
 type Store struct {
@@ -23,6 +25,13 @@ type Store struct {
 	path   string
 	NextID int    `json:"next_id"`
 	Tasks  []Task `json:"tasks"`
+}
+
+// NewTask is the input to Add. Makes it easy to add fields without breaking callers.
+type NewTask struct {
+	Title   string
+	DueDate string
+	Labels  []string
 }
 
 const DateFormat = "2006-01-02"
@@ -33,6 +42,7 @@ var (
 	ErrReorderLength  = errors.New("reorder ids must match existing tasks")
 	ErrReorderUnknown = errors.New("reorder contains unknown id")
 	ErrBadDueDate     = errors.New("due date must be YYYY-MM-DD")
+	ErrBadLabel       = errors.New("label must be non-empty and not contain whitespace")
 )
 
 type SortMode string
@@ -50,6 +60,41 @@ func validateDueDate(s string) error {
 		return ErrBadDueDate
 	}
 	return nil
+}
+
+// normalizeLabels lowercases, trims, and dedupes; rejects empty or whitespace-containing labels.
+func normalizeLabels(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	seen := make(map[string]bool, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, l := range raw {
+		l = strings.ToLower(strings.TrimSpace(l))
+		if l == "" {
+			return nil, ErrBadLabel
+		}
+		if strings.ContainsAny(l, " \t\n\r") {
+			return nil, ErrBadLabel
+		}
+		if seen[l] {
+			continue
+		}
+		seen[l] = true
+		out = append(out, l)
+	}
+	return out, nil
+}
+
+func validateLabel(label string) (string, error) {
+	normalized, err := normalizeLabels([]string{label})
+	if err != nil {
+		return "", err
+	}
+	if len(normalized) == 0 {
+		return "", ErrBadLabel
+	}
+	return normalized[0], nil
 }
 
 func defaultStorePath() (string, error) {
@@ -110,16 +155,40 @@ func (s *Store) List() []Task {
 	return out
 }
 
-func (s *Store) Add(title, dueDate string) (Task, error) {
+// Labels returns every distinct label present across all tasks, sorted.
+func (s *Store) Labels() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seen := make(map[string]bool)
+	for _, t := range s.Tasks {
+		for _, l := range t.Labels {
+			seen[l] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for l := range seen {
+		out = append(out, l)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (s *Store) Add(n NewTask) (Task, error) {
+	title := strings.TrimSpace(n.Title)
 	if title == "" {
 		return Task{}, ErrEmptyTitle
 	}
-	if err := validateDueDate(dueDate); err != nil {
+	if err := validateDueDate(n.DueDate); err != nil {
 		return Task{}, err
 	}
+	labels, err := normalizeLabels(n.Labels)
+	if err != nil {
+		return Task{}, err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	t := Task{ID: s.NextID, Title: title, DueDate: dueDate}
+	t := Task{ID: s.NextID, Title: title, DueDate: n.DueDate, Labels: labels}
 	s.NextID++
 	s.Tasks = append(s.Tasks, t)
 	if err := s.save(); err != nil {
@@ -144,6 +213,7 @@ func (s *Store) SetDone(id int, done bool) (Task, error) {
 }
 
 func (s *Store) SetTitle(id int, title string) (Task, error) {
+	title = strings.TrimSpace(title)
 	if title == "" {
 		return Task{}, ErrEmptyTitle
 	}
@@ -175,6 +245,76 @@ func (s *Store) SetDue(id int, dueDate string) (Task, error) {
 			}
 			return s.Tasks[i], nil
 		}
+	}
+	return Task{}, ErrNotFound
+}
+
+func (s *Store) SetLabels(id int, labels []string) (Task, error) {
+	normalized, err := normalizeLabels(labels)
+	if err != nil {
+		return Task{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.Tasks {
+		if s.Tasks[i].ID == id {
+			s.Tasks[i].Labels = normalized
+			if err := s.save(); err != nil {
+				return Task{}, err
+			}
+			return s.Tasks[i], nil
+		}
+	}
+	return Task{}, ErrNotFound
+}
+
+func (s *Store) AddLabel(id int, label string) (Task, error) {
+	l, err := validateLabel(label)
+	if err != nil {
+		return Task{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.Tasks {
+		if s.Tasks[i].ID != id {
+			continue
+		}
+		for _, existing := range s.Tasks[i].Labels {
+			if existing == l {
+				return s.Tasks[i], nil // already present, no-op
+			}
+		}
+		s.Tasks[i].Labels = append(s.Tasks[i].Labels, l)
+		if err := s.save(); err != nil {
+			return Task{}, err
+		}
+		return s.Tasks[i], nil
+	}
+	return Task{}, ErrNotFound
+}
+
+func (s *Store) RemoveLabel(id int, label string) (Task, error) {
+	l, err := validateLabel(label)
+	if err != nil {
+		return Task{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.Tasks {
+		if s.Tasks[i].ID != id {
+			continue
+		}
+		kept := s.Tasks[i].Labels[:0]
+		for _, existing := range s.Tasks[i].Labels {
+			if existing != l {
+				kept = append(kept, existing)
+			}
+		}
+		s.Tasks[i].Labels = kept
+		if err := s.save(); err != nil {
+			return Task{}, err
+		}
+		return s.Tasks[i], nil
 	}
 	return Task{}, ErrNotFound
 }
@@ -249,4 +389,15 @@ func IsOverdue(t Task, today time.Time) bool {
 	}
 	todayStart := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, today.Location())
 	return due.Before(todayStart)
+}
+
+// HasLabel reports whether the task has the given label (case-insensitive).
+func HasLabel(t Task, label string) bool {
+	label = strings.ToLower(strings.TrimSpace(label))
+	for _, l := range t.Labels {
+		if l == label {
+			return true
+		}
+	}
+	return false
 }

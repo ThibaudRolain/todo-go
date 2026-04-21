@@ -19,6 +19,7 @@ func runServer(store *Store, addr string) error {
 	mux.HandleFunc("/api/tasks", apiTasksHandler(store))
 	mux.HandleFunc("/api/tasks/", apiTaskByIDHandler(store))
 	mux.HandleFunc("/api/reorder", apiReorderHandler(store))
+	mux.HandleFunc("/api/labels", apiLabelsHandler(store))
 
 	webRoot, err := fs.Sub(webFS, "web")
 	if err != nil {
@@ -35,6 +36,7 @@ func apiTasksHandler(store *Store) http.HandlerFunc {
 		switch r.Method {
 		case http.MethodGet:
 			tasks := store.List()
+
 			switch r.URL.Query().Get("status") {
 			case "pending":
 				tasks = filterByDone(tasks, false)
@@ -45,6 +47,10 @@ func apiTasksHandler(store *Store) http.HandlerFunc {
 			default:
 				http.Error(w, "invalid status; want one of: pending, done, all", http.StatusBadRequest)
 				return
+			}
+
+			if label := r.URL.Query().Get("label"); label != "" {
+				tasks = filterByLabel(tasks, label)
 			}
 
 			sortParam := r.URL.Query().Get("sort")
@@ -61,8 +67,9 @@ func apiTasksHandler(store *Store) http.HandlerFunc {
 
 		case http.MethodPost:
 			var body struct {
-				Title   string `json:"title"`
-				DueDate string `json:"due_date"`
+				Title   string   `json:"title"`
+				DueDate string   `json:"due_date"`
+				Labels  []string `json:"labels"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid json", http.StatusBadRequest)
@@ -73,7 +80,7 @@ func apiTasksHandler(store *Store) http.HandlerFunc {
 				http.Error(w, "title required", http.StatusBadRequest)
 				return
 			}
-			t, err := store.Add(title, body.DueDate)
+			t, err := store.Add(NewTask{Title: title, DueDate: body.DueDate, Labels: body.Labels})
 			if err != nil {
 				writeStoreErr(w, err)
 				return
@@ -99,15 +106,16 @@ func apiTaskByIDHandler(store *Store) http.HandlerFunc {
 		switch r.Method {
 		case http.MethodPatch:
 			var body struct {
-				Done    *bool   `json:"done"`
-				Title   *string `json:"title"`
-				DueDate *string `json:"due_date"`
+				Done    *bool     `json:"done"`
+				Title   *string   `json:"title"`
+				DueDate *string   `json:"due_date"`
+				Labels  *[]string `json:"labels"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				http.Error(w, "invalid json", http.StatusBadRequest)
 				return
 			}
-			if body.Done == nil && body.Title == nil && body.DueDate == nil {
+			if body.Done == nil && body.Title == nil && body.DueDate == nil && body.Labels == nil {
 				http.Error(w, "no fields to update", http.StatusBadRequest)
 				return
 			}
@@ -127,6 +135,13 @@ func apiTaskByIDHandler(store *Store) http.HandlerFunc {
 			}
 			if body.DueDate != nil {
 				updated, err = store.SetDue(id, strings.TrimSpace(*body.DueDate))
+				if err != nil {
+					writeStoreErr(w, err)
+					return
+				}
+			}
+			if body.Labels != nil {
+				updated, err = store.SetLabels(id, *body.Labels)
 				if err != nil {
 					writeStoreErr(w, err)
 					return
@@ -180,11 +195,21 @@ func apiReorderHandler(store *Store) http.HandlerFunc {
 	}
 }
 
+func apiLabelsHandler(store *Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		writeJSON(w, http.StatusOK, store.Labels())
+	}
+}
+
 func writeStoreErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
-	case errors.Is(err, ErrEmptyTitle), errors.Is(err, ErrBadDueDate):
+	case errors.Is(err, ErrEmptyTitle), errors.Is(err, ErrBadDueDate), errors.Is(err, ErrBadLabel):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)

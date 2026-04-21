@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -25,6 +27,9 @@ func newRootCmd(store *Store) *cobra.Command {
 		newEditCmd(store),
 		newDueCmd(store),
 		newUndueCmd(store),
+		newTagCmd(store),
+		newUntagCmd(store),
+		newLabelsCmd(store),
 		newRemoveCmd(store),
 		newServeCmd(store),
 	)
@@ -33,30 +38,29 @@ func newRootCmd(store *Store) *cobra.Command {
 
 func newAddCmd(store *Store) *cobra.Command {
 	var due string
+	var labels []string
 	cmd := &cobra.Command{
 		Use:   "add <title>",
 		Short: "Add a new task",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			t, err := store.Add(args[0], due)
+			t, err := store.Add(NewTask{Title: args[0], DueDate: due, Labels: labels})
 			if err != nil {
 				return err
 			}
-			if t.DueDate != "" {
-				fmt.Printf("added #%d: %s (due %s)\n", t.ID, t.Title, t.DueDate)
-			} else {
-				fmt.Printf("added #%d: %s\n", t.ID, t.Title)
-			}
+			fmt.Println(formatTask(t))
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&due, "due", "", "due date (YYYY-MM-DD)")
+	cmd.Flags().StringSliceVarP(&labels, "label", "l", nil, "label to attach (repeatable)")
 	return cmd
 }
 
 func newListCmd(store *Store) *cobra.Command {
 	var pending, done bool
 	var sortMode string
+	var label string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List tasks",
@@ -75,25 +79,16 @@ func newListCmd(store *Store) *cobra.Command {
 			case done:
 				tasks = filterByDone(tasks, true)
 			}
+			if label != "" {
+				tasks = filterByLabel(tasks, label)
+			}
 			SortTasks(tasks, mode)
 			if len(tasks) == 0 {
 				fmt.Println("(no tasks)")
 				return nil
 			}
-			today := time.Now()
 			for _, t := range tasks {
-				status := "[ ]"
-				if t.Done {
-					status = "[x]"
-				}
-				line := fmt.Sprintf("%s %d. %s", status, t.ID, t.Title)
-				switch {
-				case IsOverdue(t, today):
-					line += fmt.Sprintf(" — OVERDUE (%s)", t.DueDate)
-				case t.DueDate != "":
-					line += fmt.Sprintf(" — due %s", t.DueDate)
-				}
-				fmt.Println(line)
+				fmt.Println(formatTaskLine(t, time.Now()))
 			}
 			return nil
 		},
@@ -101,6 +96,7 @@ func newListCmd(store *Store) *cobra.Command {
 	cmd.Flags().BoolVar(&pending, "pending", false, "only show tasks that are not done")
 	cmd.Flags().BoolVar(&done, "done", false, "only show tasks that are done")
 	cmd.Flags().StringVar(&sortMode, "sort", string(SortByDue), "sort order: due, manual")
+	cmd.Flags().StringVarP(&label, "label", "l", "", "only show tasks with this label")
 	return cmd
 }
 
@@ -201,6 +197,69 @@ func newUndueCmd(store *Store) *cobra.Command {
 	}
 }
 
+func newTagCmd(store *Store) *cobra.Command {
+	return &cobra.Command{
+		Use:   "tag <id> <label>",
+		Short: "Add a label to a task",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.Atoi(args[0])
+			if err != nil {
+				return fmt.Errorf("invalid id %q", args[0])
+			}
+			t, err := store.AddLabel(id, args[1])
+			if err != nil {
+				return err
+			}
+			fmt.Printf("tagged #%d: %s\n", t.ID, strings.Join(t.Labels, ", "))
+			return nil
+		},
+	}
+}
+
+func newUntagCmd(store *Store) *cobra.Command {
+	return &cobra.Command{
+		Use:   "untag <id> <label>",
+		Short: "Remove a label from a task",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := strconv.Atoi(args[0])
+			if err != nil {
+				return fmt.Errorf("invalid id %q", args[0])
+			}
+			t, err := store.RemoveLabel(id, args[1])
+			if err != nil {
+				return err
+			}
+			if len(t.Labels) == 0 {
+				fmt.Printf("removed label from #%d (no labels remain)\n", t.ID)
+			} else {
+				fmt.Printf("untagged #%d: %s\n", t.ID, strings.Join(t.Labels, ", "))
+			}
+			return nil
+		},
+	}
+}
+
+func newLabelsCmd(store *Store) *cobra.Command {
+	return &cobra.Command{
+		Use:   "labels",
+		Short: "List all labels in use",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			labels := store.Labels()
+			if len(labels) == 0 {
+				fmt.Println("(no labels)")
+				return nil
+			}
+			for _, l := range labels {
+				fmt.Println(l)
+			}
+			return nil
+		},
+	}
+}
+
 func newRemoveCmd(store *Store) *cobra.Command {
 	return &cobra.Command{
 		Use:     "remove <id>",
@@ -245,4 +304,54 @@ func filterByDone(tasks []Task, done bool) []Task {
 		}
 	}
 	return out
+}
+
+func filterByLabel(tasks []Task, label string) []Task {
+	out := tasks[:0:0]
+	for _, t := range tasks {
+		if HasLabel(t, label) {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func formatTask(t Task) string {
+	parts := []string{fmt.Sprintf("added #%d: %s", t.ID, t.Title)}
+	if t.DueDate != "" {
+		parts = append(parts, fmt.Sprintf("due %s", t.DueDate))
+	}
+	if len(t.Labels) > 0 {
+		parts = append(parts, fmt.Sprintf("labels: %s", strings.Join(t.Labels, ", ")))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatTaskLine(t Task, today time.Time) string {
+	status := "[ ]"
+	if t.Done {
+		status = "[x]"
+	}
+	line := fmt.Sprintf("%s %d. %s", status, t.ID, t.Title)
+
+	suffix := []string{}
+	switch {
+	case IsOverdue(t, today):
+		suffix = append(suffix, fmt.Sprintf("OVERDUE (%s)", t.DueDate))
+	case t.DueDate != "":
+		suffix = append(suffix, fmt.Sprintf("due %s", t.DueDate))
+	}
+	if len(t.Labels) > 0 {
+		tagStr := make([]string, len(t.Labels))
+		copy(tagStr, t.Labels)
+		sort.Strings(tagStr)
+		for i, l := range tagStr {
+			tagStr[i] = "#" + l
+		}
+		suffix = append(suffix, strings.Join(tagStr, " "))
+	}
+	if len(suffix) > 0 {
+		line += " — " + strings.Join(suffix, " · ")
+	}
+	return line
 }

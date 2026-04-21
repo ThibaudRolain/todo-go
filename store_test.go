@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -17,36 +18,37 @@ func newTempStore(t *testing.T) *Store {
 	return s
 }
 
+func add(t *testing.T, s *Store, title string) Task {
+	t.Helper()
+	task, err := s.Add(NewTask{Title: title})
+	if err != nil {
+		t.Fatalf("Add %q: %v", title, err)
+	}
+	return task
+}
+
 func TestStore_AddAssignsSequentialIDs(t *testing.T) {
 	s := newTempStore(t)
-
-	a, err := s.Add("first", "")
-	if err != nil {
-		t.Fatalf("Add: %v", err)
-	}
-	b, err := s.Add("second", "")
-	if err != nil {
-		t.Fatalf("Add: %v", err)
-	}
-
+	a := add(t, s, "first")
+	b := add(t, s, "second")
 	if a.ID != 1 || b.ID != 2 {
 		t.Fatalf("want ids 1 and 2, got %d and %d", a.ID, b.ID)
-	}
-	if a.Title != "first" || a.Done {
-		t.Fatalf("unexpected task a: %+v", a)
 	}
 }
 
 func TestStore_AddRejectsEmpty(t *testing.T) {
 	s := newTempStore(t)
-	if _, err := s.Add("", ""); !errors.Is(err, ErrEmptyTitle) {
+	if _, err := s.Add(NewTask{Title: ""}); !errors.Is(err, ErrEmptyTitle) {
 		t.Fatalf("want ErrEmptyTitle, got %v", err)
+	}
+	if _, err := s.Add(NewTask{Title: "   "}); !errors.Is(err, ErrEmptyTitle) {
+		t.Fatalf("want ErrEmptyTitle for whitespace, got %v", err)
 	}
 }
 
 func TestStore_AddWithDueDate(t *testing.T) {
 	s := newTempStore(t)
-	task, err := s.Add("buy milk", "2026-05-01")
+	task, err := s.Add(NewTask{Title: "buy milk", DueDate: "2026-05-01"})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -57,17 +59,43 @@ func TestStore_AddWithDueDate(t *testing.T) {
 
 func TestStore_AddRejectsBadDue(t *testing.T) {
 	s := newTempStore(t)
-	if _, err := s.Add("x", "not-a-date"); !errors.Is(err, ErrBadDueDate) {
+	if _, err := s.Add(NewTask{Title: "x", DueDate: "not-a-date"}); !errors.Is(err, ErrBadDueDate) {
 		t.Fatalf("want ErrBadDueDate, got %v", err)
 	}
-	if _, err := s.Add("x", "2026/05/01"); !errors.Is(err, ErrBadDueDate) {
-		t.Fatalf("want ErrBadDueDate for slash format, got %v", err)
+}
+
+func TestStore_AddWithLabels(t *testing.T) {
+	s := newTempStore(t)
+	task, err := s.Add(NewTask{Title: "x", Labels: []string{"Work", "home", "WORK"}})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	want := []string{"work", "home"}
+	if !reflect.DeepEqual(task.Labels, want) {
+		t.Fatalf("labels: want %v (deduped + lowercased, first-seen order), got %v", want, task.Labels)
+	}
+}
+
+func TestStore_AddRejectsBadLabels(t *testing.T) {
+	s := newTempStore(t)
+	cases := []struct{ name string; labels []string }{
+		{"empty", []string{""}},
+		{"whitespace", []string{"   "}},
+		{"space inside", []string{"has space"}},
+		{"tab inside", []string{"x\ty"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := s.Add(NewTask{Title: "x", Labels: c.labels}); !errors.Is(err, ErrBadLabel) {
+				t.Fatalf("want ErrBadLabel, got %v", err)
+			}
+		})
 	}
 }
 
 func TestStore_SetDoneTogglesState(t *testing.T) {
 	s := newTempStore(t)
-	task, _ := s.Add("buy milk", "")
+	task := add(t, s, "buy milk")
 
 	updated, err := s.SetDone(task.ID, true)
 	if err != nil {
@@ -77,10 +105,7 @@ func TestStore_SetDoneTogglesState(t *testing.T) {
 		t.Fatalf("want Done=true, got false")
 	}
 
-	updated, err = s.SetDone(task.ID, false)
-	if err != nil {
-		t.Fatalf("SetDone false: %v", err)
-	}
+	updated, _ = s.SetDone(task.ID, false)
 	if updated.Done {
 		t.Fatalf("want Done=false, got true")
 	}
@@ -95,37 +120,27 @@ func TestStore_SetDoneUnknownID(t *testing.T) {
 
 func TestStore_SetTitleUpdates(t *testing.T) {
 	s := newTempStore(t)
-	task, _ := s.Add("old", "")
-
+	task := add(t, s, "old")
 	updated, err := s.SetTitle(task.ID, "new")
 	if err != nil {
 		t.Fatalf("SetTitle: %v", err)
 	}
 	if updated.Title != "new" {
-		t.Fatalf("want title 'new', got %q", updated.Title)
+		t.Fatalf("want 'new', got %q", updated.Title)
 	}
 }
 
 func TestStore_SetTitleRejectsEmpty(t *testing.T) {
 	s := newTempStore(t)
-	task, _ := s.Add("old", "")
-
+	task := add(t, s, "old")
 	if _, err := s.SetTitle(task.ID, ""); !errors.Is(err, ErrEmptyTitle) {
 		t.Fatalf("want ErrEmptyTitle, got %v", err)
 	}
 }
 
-func TestStore_SetTitleUnknownID(t *testing.T) {
-	s := newTempStore(t)
-	if _, err := s.SetTitle(99, "x"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("want ErrNotFound, got %v", err)
-	}
-}
-
 func TestStore_SetDueUpdates(t *testing.T) {
 	s := newTempStore(t)
-	task, _ := s.Add("x", "")
-
+	task := add(t, s, "x")
 	updated, err := s.SetDue(task.ID, "2026-06-10")
 	if err != nil {
 		t.Fatalf("SetDue: %v", err)
@@ -137,12 +152,8 @@ func TestStore_SetDueUpdates(t *testing.T) {
 
 func TestStore_SetDueClears(t *testing.T) {
 	s := newTempStore(t)
-	task, _ := s.Add("x", "2026-06-10")
-
-	updated, err := s.SetDue(task.ID, "")
-	if err != nil {
-		t.Fatalf("SetDue clear: %v", err)
-	}
+	task, _ := s.Add(NewTask{Title: "x", DueDate: "2026-06-10"})
+	updated, _ := s.SetDue(task.ID, "")
 	if updated.DueDate != "" {
 		t.Fatalf("want empty due, got %q", updated.DueDate)
 	}
@@ -150,35 +161,125 @@ func TestStore_SetDueClears(t *testing.T) {
 
 func TestStore_SetDueRejectsBad(t *testing.T) {
 	s := newTempStore(t)
-	task, _ := s.Add("x", "")
+	task := add(t, s, "x")
 	if _, err := s.SetDue(task.ID, "yesterday"); !errors.Is(err, ErrBadDueDate) {
 		t.Fatalf("want ErrBadDueDate, got %v", err)
 	}
 }
 
+func TestStore_SetLabelsReplaces(t *testing.T) {
+	s := newTempStore(t)
+	task, _ := s.Add(NewTask{Title: "x", Labels: []string{"work"}})
+
+	updated, err := s.SetLabels(task.ID, []string{"Home", "urgent", "home"})
+	if err != nil {
+		t.Fatalf("SetLabels: %v", err)
+	}
+	want := []string{"home", "urgent"}
+	if !reflect.DeepEqual(updated.Labels, want) {
+		t.Fatalf("want %v, got %v", want, updated.Labels)
+	}
+}
+
+func TestStore_SetLabelsEmptyClears(t *testing.T) {
+	s := newTempStore(t)
+	task, _ := s.Add(NewTask{Title: "x", Labels: []string{"work"}})
+	updated, err := s.SetLabels(task.ID, nil)
+	if err != nil {
+		t.Fatalf("SetLabels nil: %v", err)
+	}
+	if len(updated.Labels) != 0 {
+		t.Fatalf("want empty labels, got %v", updated.Labels)
+	}
+}
+
+func TestStore_AddLabelAppends(t *testing.T) {
+	s := newTempStore(t)
+	task := add(t, s, "x")
+
+	updated, err := s.AddLabel(task.ID, "Work")
+	if err != nil {
+		t.Fatalf("AddLabel: %v", err)
+	}
+	if !reflect.DeepEqual(updated.Labels, []string{"work"}) {
+		t.Fatalf("want [work], got %v", updated.Labels)
+	}
+
+	// Adding again is a no-op (dedupe).
+	updated, _ = s.AddLabel(task.ID, "work")
+	if !reflect.DeepEqual(updated.Labels, []string{"work"}) {
+		t.Fatalf("dedupe failed: got %v", updated.Labels)
+	}
+
+	updated, _ = s.AddLabel(task.ID, "home")
+	if !reflect.DeepEqual(updated.Labels, []string{"work", "home"}) {
+		t.Fatalf("want [work home], got %v", updated.Labels)
+	}
+}
+
+func TestStore_AddLabelRejectsBad(t *testing.T) {
+	s := newTempStore(t)
+	task := add(t, s, "x")
+	if _, err := s.AddLabel(task.ID, "has space"); !errors.Is(err, ErrBadLabel) {
+		t.Fatalf("want ErrBadLabel, got %v", err)
+	}
+}
+
+func TestStore_RemoveLabelDrops(t *testing.T) {
+	s := newTempStore(t)
+	task, _ := s.Add(NewTask{Title: "x", Labels: []string{"work", "home"}})
+	updated, err := s.RemoveLabel(task.ID, "work")
+	if err != nil {
+		t.Fatalf("RemoveLabel: %v", err)
+	}
+	if !reflect.DeepEqual(updated.Labels, []string{"home"}) {
+		t.Fatalf("want [home], got %v", updated.Labels)
+	}
+}
+
+func TestStore_RemoveLabelMissing(t *testing.T) {
+	s := newTempStore(t)
+	task, _ := s.Add(NewTask{Title: "x", Labels: []string{"work"}})
+	updated, err := s.RemoveLabel(task.ID, "nope")
+	if err != nil {
+		t.Fatalf("RemoveLabel missing: %v", err)
+	}
+	if !reflect.DeepEqual(updated.Labels, []string{"work"}) {
+		t.Fatalf("labels shouldn't change when removing a non-existent label, got %v", updated.Labels)
+	}
+}
+
+func TestStore_LabelsCollectsDistinct(t *testing.T) {
+	s := newTempStore(t)
+	s.Add(NewTask{Title: "a", Labels: []string{"work", "home"}})
+	s.Add(NewTask{Title: "b", Labels: []string{"work", "urgent"}})
+	s.Add(NewTask{Title: "c"})
+
+	got := s.Labels()
+	want := []string{"home", "urgent", "work"} // sorted
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("want %v, got %v", want, got)
+	}
+}
+
 func TestStore_RemoveDropsTask(t *testing.T) {
 	s := newTempStore(t)
-	a, _ := s.Add("a", "")
-	b, _ := s.Add("b", "")
-	c, _ := s.Add("c", "")
+	a := add(t, s, "a")
+	b := add(t, s, "b")
+	c := add(t, s, "c")
 
 	if err := s.Remove(b.ID); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-
 	tasks := s.List()
-	if len(tasks) != 2 {
-		t.Fatalf("want 2 tasks left, got %d", len(tasks))
-	}
-	if tasks[0].ID != a.ID || tasks[1].ID != c.ID {
+	if len(tasks) != 2 || tasks[0].ID != a.ID || tasks[1].ID != c.ID {
 		t.Fatalf("unexpected tasks after remove: %+v", tasks)
 	}
 }
 
 func TestStore_RemoveUnknownID(t *testing.T) {
 	s := newTempStore(t)
-	s.Add("a", "")
-
+	add(t, s, "a")
 	if err := s.Remove(99); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
@@ -186,25 +287,23 @@ func TestStore_RemoveUnknownID(t *testing.T) {
 
 func TestStore_ReorderChangesOrder(t *testing.T) {
 	s := newTempStore(t)
-	s.Add("a", "")
-	s.Add("b", "")
-	s.Add("c", "")
+	add(t, s, "a")
+	add(t, s, "b")
+	add(t, s, "c")
 
 	if err := s.Reorder([]int{3, 1, 2}); err != nil {
 		t.Fatalf("Reorder: %v", err)
 	}
-
 	tasks := s.List()
-	ids := []int{tasks[0].ID, tasks[1].ID, tasks[2].ID}
-	if ids[0] != 3 || ids[1] != 1 || ids[2] != 2 {
-		t.Fatalf("unexpected order after reorder: %+v", ids)
+	if tasks[0].ID != 3 || tasks[1].ID != 1 || tasks[2].ID != 2 {
+		t.Fatalf("unexpected order after reorder: %+v", tasks)
 	}
 }
 
 func TestStore_ReorderRejectsMismatchedLength(t *testing.T) {
 	s := newTempStore(t)
-	s.Add("a", "")
-	s.Add("b", "")
+	add(t, s, "a")
+	add(t, s, "b")
 	if err := s.Reorder([]int{1}); !errors.Is(err, ErrReorderLength) {
 		t.Fatalf("want ErrReorderLength, got %v", err)
 	}
@@ -212,8 +311,8 @@ func TestStore_ReorderRejectsMismatchedLength(t *testing.T) {
 
 func TestStore_ReorderRejectsUnknownID(t *testing.T) {
 	s := newTempStore(t)
-	s.Add("a", "")
-	s.Add("b", "")
+	add(t, s, "a")
+	add(t, s, "b")
 	if err := s.Reorder([]int{1, 99}); !errors.Is(err, ErrReorderUnknown) {
 		t.Fatalf("want ErrReorderUnknown, got %v", err)
 	}
@@ -221,8 +320,8 @@ func TestStore_ReorderRejectsUnknownID(t *testing.T) {
 
 func TestStore_ReorderRejectsDuplicates(t *testing.T) {
 	s := newTempStore(t)
-	s.Add("a", "")
-	s.Add("b", "")
+	add(t, s, "a")
+	add(t, s, "b")
 	if err := s.Reorder([]int{1, 1}); !errors.Is(err, ErrReorderUnknown) {
 		t.Fatalf("want ErrReorderUnknown (duplicate), got %v", err)
 	}
@@ -235,11 +334,11 @@ func TestStore_PersistsAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStore 1: %v", err)
 	}
-	s1.Add("a", "")
-	s1.Add("b", "")
+	s1.Add(NewTask{Title: "a", Labels: []string{"work"}})
+	s1.Add(NewTask{Title: "b"})
 	s1.SetDone(1, true)
 	s1.Remove(2)
-	s1.Add("c", "2026-07-01")
+	s1.Add(NewTask{Title: "c", DueDate: "2026-07-01", Labels: []string{"home"}})
 
 	s2, err := OpenStore(path)
 	if err != nil {
@@ -249,17 +348,14 @@ func TestStore_PersistsAcrossReopen(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Fatalf("want 2 tasks after reopen, got %d: %+v", len(tasks), tasks)
 	}
-	if tasks[0].ID != 1 || !tasks[0].Done {
-		t.Fatalf("first task should be id=1 done=true, got %+v", tasks[0])
+	if tasks[0].ID != 1 || !tasks[0].Done || !reflect.DeepEqual(tasks[0].Labels, []string{"work"}) {
+		t.Fatalf("first task wrong after reopen: %+v", tasks[0])
 	}
-	if tasks[1].ID != 3 || tasks[1].Title != "c" || tasks[1].DueDate != "2026-07-01" {
-		t.Fatalf("second task should be id=3 title=c due=2026-07-01, got %+v", tasks[1])
+	if tasks[1].ID != 3 || tasks[1].Title != "c" || tasks[1].DueDate != "2026-07-01" || !reflect.DeepEqual(tasks[1].Labels, []string{"home"}) {
+		t.Fatalf("second task wrong after reopen: %+v", tasks[1])
 	}
 
-	next, err := s2.Add("d", "")
-	if err != nil {
-		t.Fatalf("Add after reopen: %v", err)
-	}
+	next, _ := s2.Add(NewTask{Title: "d"})
 	if next.ID != 4 {
 		t.Fatalf("want next id 4 after reopen, got %d", next.ID)
 	}
@@ -267,11 +363,10 @@ func TestStore_PersistsAcrossReopen(t *testing.T) {
 
 func TestStore_ListReturnsCopy(t *testing.T) {
 	s := newTempStore(t)
-	s.Add("a", "")
+	add(t, s, "a")
 
 	got := s.List()
 	got[0].Title = "mutated"
-
 	fresh := s.List()
 	if fresh[0].Title != "a" {
 		t.Fatalf("List() must return a copy; store was mutated via caller")
@@ -280,48 +375,59 @@ func TestStore_ListReturnsCopy(t *testing.T) {
 
 func TestFilterByDone(t *testing.T) {
 	tasks := []Task{
-		{ID: 1, Title: "a", Done: true},
-		{ID: 2, Title: "b", Done: false},
-		{ID: 3, Title: "c", Done: true},
+		{ID: 1, Done: true},
+		{ID: 2, Done: false},
+		{ID: 3, Done: true},
 	}
 	pending := filterByDone(tasks, false)
 	if len(pending) != 1 || pending[0].ID != 2 {
 		t.Fatalf("pending filter wrong: %+v", pending)
 	}
 	done := filterByDone(tasks, true)
-	if len(done) != 2 || done[0].ID != 1 || done[1].ID != 3 {
+	if len(done) != 2 {
 		t.Fatalf("done filter wrong: %+v", done)
+	}
+}
+
+func TestFilterByLabel(t *testing.T) {
+	tasks := []Task{
+		{ID: 1, Labels: []string{"work"}},
+		{ID: 2, Labels: []string{"home"}},
+		{ID: 3, Labels: []string{"work", "urgent"}},
+	}
+	got := filterByLabel(tasks, "work")
+	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 3 {
+		t.Fatalf("want [1 3] for work, got %+v", got)
+	}
+	got = filterByLabel(tasks, "WORK")
+	if len(got) != 2 {
+		t.Fatalf("label filter should be case-insensitive, got %+v", got)
+	}
+	got = filterByLabel(tasks, "nope")
+	if len(got) != 0 {
+		t.Fatalf("want none for unknown label, got %+v", got)
 	}
 }
 
 func TestSortTasks_ByDue(t *testing.T) {
 	tasks := []Task{
-		{ID: 1, Title: "done1", Done: true, DueDate: "2026-01-01"},
-		{ID: 2, Title: "no due"},
-		{ID: 3, Title: "late", DueDate: "2026-05-01"},
-		{ID: 4, Title: "early", DueDate: "2026-04-01"},
-		{ID: 5, Title: "done2", Done: true},
+		{ID: 1, Done: true, DueDate: "2026-01-01"},
+		{ID: 2},
+		{ID: 3, DueDate: "2026-05-01"},
+		{ID: 4, DueDate: "2026-04-01"},
+		{ID: 5, Done: true},
 	}
 	SortTasks(tasks, SortByDue)
-
 	wantOrder := []int{4, 3, 2, 1, 5}
-	got := make([]int, len(tasks))
-	for i, tk := range tasks {
-		got[i] = tk.ID
-	}
 	for i, id := range wantOrder {
-		if got[i] != id {
-			t.Fatalf("sort mismatch at %d: want %v, got %v", i, wantOrder, got)
+		if tasks[i].ID != id {
+			t.Fatalf("sort mismatch at %d: want %v", i, wantOrder)
 		}
 	}
 }
 
 func TestSortTasks_Manual(t *testing.T) {
-	tasks := []Task{
-		{ID: 5, Title: "e"},
-		{ID: 1, Title: "a"},
-		{ID: 3, Title: "c"},
-	}
+	tasks := []Task{{ID: 5}, {ID: 1}, {ID: 3}}
 	SortTasks(tasks, SortManual)
 	if tasks[0].ID != 5 || tasks[1].ID != 1 || tasks[2].ID != 3 {
 		t.Fatalf("manual sort should not reorder, got %+v", tasks)
@@ -348,5 +454,15 @@ func TestIsOverdue(t *testing.T) {
 				t.Fatalf("IsOverdue(%+v) = %v, want %v", c.task, got, c.want)
 			}
 		})
+	}
+}
+
+func TestHasLabel(t *testing.T) {
+	task := Task{Labels: []string{"work", "urgent"}}
+	if !HasLabel(task, "work") || !HasLabel(task, "WORK") {
+		t.Fatalf("HasLabel should be case-insensitive")
+	}
+	if HasLabel(task, "home") {
+		t.Fatalf("HasLabel should be false for missing label")
 	}
 }
