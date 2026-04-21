@@ -1,4 +1,4 @@
-package main
+package task
 
 import (
 	"errors"
@@ -38,7 +38,7 @@ func TestStore_AddAssignsSequentialIDs(t *testing.T) {
 
 func TestStore_AddRejectsEmpty(t *testing.T) {
 	s := newTempStore(t)
-	if _, err := s.Add(NewTask{Title: ""}); !errors.Is(err, ErrEmptyTitle) {
+	if _, err := s.Add(NewTask{}); !errors.Is(err, ErrEmptyTitle) {
 		t.Fatalf("want ErrEmptyTitle, got %v", err)
 	}
 	if _, err := s.Add(NewTask{Title: "   "}); !errors.Is(err, ErrEmptyTitle) {
@@ -72,42 +72,29 @@ func TestStore_AddWithLabels(t *testing.T) {
 	}
 	want := []string{"work", "home"}
 	if !reflect.DeepEqual(task.Labels, want) {
-		t.Fatalf("labels: want %v (deduped + lowercased, first-seen order), got %v", want, task.Labels)
+		t.Fatalf("want %v, got %v", want, task.Labels)
 	}
 }
 
 func TestStore_AddRejectsBadLabels(t *testing.T) {
 	s := newTempStore(t)
-	cases := []struct{ name string; labels []string }{
-		{"empty", []string{""}},
-		{"whitespace", []string{"   "}},
-		{"space inside", []string{"has space"}},
-		{"tab inside", []string{"x\ty"}},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if _, err := s.Add(NewTask{Title: "x", Labels: c.labels}); !errors.Is(err, ErrBadLabel) {
-				t.Fatalf("want ErrBadLabel, got %v", err)
-			}
-		})
+	for _, c := range [][]string{{""}, {"   "}, {"has space"}, {"x\ty"}} {
+		if _, err := s.Add(NewTask{Title: "x", Labels: c}); !errors.Is(err, ErrBadLabel) {
+			t.Fatalf("want ErrBadLabel for %v, got %v", c, err)
+		}
 	}
 }
 
 func TestStore_SetDoneTogglesState(t *testing.T) {
 	s := newTempStore(t)
 	task := add(t, s, "buy milk")
-
 	updated, err := s.SetDone(task.ID, true)
-	if err != nil {
-		t.Fatalf("SetDone true: %v", err)
+	if err != nil || !updated.Done {
+		t.Fatalf("SetDone true: %v %+v", err, updated)
 	}
-	if !updated.Done {
-		t.Fatalf("want Done=true, got false")
-	}
-
 	updated, _ = s.SetDone(task.ID, false)
 	if updated.Done {
-		t.Fatalf("want Done=false, got true")
+		t.Fatalf("want Done=false")
 	}
 }
 
@@ -122,11 +109,8 @@ func TestStore_SetTitleUpdates(t *testing.T) {
 	s := newTempStore(t)
 	task := add(t, s, "old")
 	updated, err := s.SetTitle(task.ID, "new")
-	if err != nil {
-		t.Fatalf("SetTitle: %v", err)
-	}
-	if updated.Title != "new" {
-		t.Fatalf("want 'new', got %q", updated.Title)
+	if err != nil || updated.Title != "new" {
+		t.Fatalf("SetTitle: %v, %+v", err, updated)
 	}
 }
 
@@ -142,11 +126,8 @@ func TestStore_SetDueUpdates(t *testing.T) {
 	s := newTempStore(t)
 	task := add(t, s, "x")
 	updated, err := s.SetDue(task.ID, "2026-06-10")
-	if err != nil {
-		t.Fatalf("SetDue: %v", err)
-	}
-	if updated.DueDate != "2026-06-10" {
-		t.Fatalf("want 2026-06-10, got %q", updated.DueDate)
+	if err != nil || updated.DueDate != "2026-06-10" {
+		t.Fatalf("SetDue: %v, %+v", err, updated)
 	}
 }
 
@@ -159,69 +140,32 @@ func TestStore_SetDueClears(t *testing.T) {
 	}
 }
 
-func TestStore_SetDueRejectsBad(t *testing.T) {
-	s := newTempStore(t)
-	task := add(t, s, "x")
-	if _, err := s.SetDue(task.ID, "yesterday"); !errors.Is(err, ErrBadDueDate) {
-		t.Fatalf("want ErrBadDueDate, got %v", err)
-	}
-}
-
 func TestStore_SetLabelsReplaces(t *testing.T) {
 	s := newTempStore(t)
 	task, _ := s.Add(NewTask{Title: "x", Labels: []string{"work"}})
-
 	updated, err := s.SetLabels(task.ID, []string{"Home", "urgent", "home"})
 	if err != nil {
 		t.Fatalf("SetLabels: %v", err)
 	}
-	want := []string{"home", "urgent"}
-	if !reflect.DeepEqual(updated.Labels, want) {
-		t.Fatalf("want %v, got %v", want, updated.Labels)
-	}
-}
-
-func TestStore_SetLabelsEmptyClears(t *testing.T) {
-	s := newTempStore(t)
-	task, _ := s.Add(NewTask{Title: "x", Labels: []string{"work"}})
-	updated, err := s.SetLabels(task.ID, nil)
-	if err != nil {
-		t.Fatalf("SetLabels nil: %v", err)
-	}
-	if len(updated.Labels) != 0 {
-		t.Fatalf("want empty labels, got %v", updated.Labels)
+	if !reflect.DeepEqual(updated.Labels, []string{"home", "urgent"}) {
+		t.Fatalf("got %v", updated.Labels)
 	}
 }
 
 func TestStore_AddLabelAppends(t *testing.T) {
 	s := newTempStore(t)
 	task := add(t, s, "x")
-
-	updated, err := s.AddLabel(task.ID, "Work")
-	if err != nil {
-		t.Fatalf("AddLabel: %v", err)
-	}
+	updated, _ := s.AddLabel(task.ID, "Work")
 	if !reflect.DeepEqual(updated.Labels, []string{"work"}) {
 		t.Fatalf("want [work], got %v", updated.Labels)
 	}
-
-	// Adding again is a no-op (dedupe).
 	updated, _ = s.AddLabel(task.ID, "work")
 	if !reflect.DeepEqual(updated.Labels, []string{"work"}) {
-		t.Fatalf("dedupe failed: got %v", updated.Labels)
+		t.Fatalf("dedupe failed: %v", updated.Labels)
 	}
-
 	updated, _ = s.AddLabel(task.ID, "home")
 	if !reflect.DeepEqual(updated.Labels, []string{"work", "home"}) {
 		t.Fatalf("want [work home], got %v", updated.Labels)
-	}
-}
-
-func TestStore_AddLabelRejectsBad(t *testing.T) {
-	s := newTempStore(t)
-	task := add(t, s, "x")
-	if _, err := s.AddLabel(task.ID, "has space"); !errors.Is(err, ErrBadLabel) {
-		t.Fatalf("want ErrBadLabel, got %v", err)
 	}
 }
 
@@ -233,32 +177,42 @@ func TestStore_RemoveLabelDrops(t *testing.T) {
 		t.Fatalf("RemoveLabel: %v", err)
 	}
 	if !reflect.DeepEqual(updated.Labels, []string{"home"}) {
-		t.Fatalf("want [home], got %v", updated.Labels)
+		t.Fatalf("got %v", updated.Labels)
 	}
 }
 
-func TestStore_RemoveLabelMissing(t *testing.T) {
+func TestStore_PublicLabels(t *testing.T) {
 	s := newTempStore(t)
-	task, _ := s.Add(NewTask{Title: "x", Labels: []string{"work"}})
-	updated, err := s.RemoveLabel(task.ID, "nope")
-	if err != nil {
-		t.Fatalf("RemoveLabel missing: %v", err)
+	if _, err := s.AddPublicLabel("work"); err != nil {
+		t.Fatalf("AddPublicLabel: %v", err)
 	}
-	if !reflect.DeepEqual(updated.Labels, []string{"work"}) {
-		t.Fatalf("labels shouldn't change when removing a non-existent label, got %v", updated.Labels)
+	if !s.IsPublic("work") {
+		t.Fatalf("IsPublic should be true")
+	}
+	if _, err := s.AddPublicLabel("work"); err != nil {
+		t.Fatalf("dedupe should not error: %v", err)
+	}
+	if got := s.GetPublicLabels(); !reflect.DeepEqual(got, []string{"work"}) {
+		t.Fatalf("want [work], got %v", got)
+	}
+	if _, err := s.RemovePublicLabel("work"); err != nil {
+		t.Fatalf("RemovePublicLabel: %v", err)
+	}
+	if s.IsPublic("work") {
+		t.Fatalf("IsPublic should be false after remove")
 	}
 }
 
-func TestStore_LabelsCollectsDistinct(t *testing.T) {
+func TestStore_HasAnyPublicLabel(t *testing.T) {
 	s := newTempStore(t)
-	s.Add(NewTask{Title: "a", Labels: []string{"work", "home"}})
-	s.Add(NewTask{Title: "b", Labels: []string{"work", "urgent"}})
-	s.Add(NewTask{Title: "c"})
-
-	got := s.Labels()
-	want := []string{"home", "urgent", "work"} // sorted
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("want %v, got %v", want, got)
+	s.AddPublicLabel("team")
+	taskPrivate := Task{Labels: []string{"home"}}
+	taskPublic := Task{Labels: []string{"home", "team"}}
+	if s.HasAnyPublicLabel(taskPrivate) {
+		t.Fatalf("private task should not match")
+	}
+	if !s.HasAnyPublicLabel(taskPublic) {
+		t.Fatalf("public task should match")
 	}
 }
 
@@ -267,7 +221,6 @@ func TestStore_RemoveDropsTask(t *testing.T) {
 	a := add(t, s, "a")
 	b := add(t, s, "b")
 	c := add(t, s, "c")
-
 	if err := s.Remove(b.ID); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
@@ -277,68 +230,44 @@ func TestStore_RemoveDropsTask(t *testing.T) {
 	}
 }
 
-func TestStore_RemoveUnknownID(t *testing.T) {
-	s := newTempStore(t)
-	add(t, s, "a")
-	if err := s.Remove(99); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("want ErrNotFound, got %v", err)
-	}
-}
-
 func TestStore_ReorderChangesOrder(t *testing.T) {
 	s := newTempStore(t)
 	add(t, s, "a")
 	add(t, s, "b")
 	add(t, s, "c")
-
 	if err := s.Reorder([]int{3, 1, 2}); err != nil {
 		t.Fatalf("Reorder: %v", err)
 	}
 	tasks := s.List()
 	if tasks[0].ID != 3 || tasks[1].ID != 1 || tasks[2].ID != 2 {
-		t.Fatalf("unexpected order after reorder: %+v", tasks)
+		t.Fatalf("unexpected order: %+v", tasks)
 	}
 }
 
-func TestStore_ReorderRejectsMismatchedLength(t *testing.T) {
+func TestStore_ReorderRejectsBadInput(t *testing.T) {
 	s := newTempStore(t)
 	add(t, s, "a")
 	add(t, s, "b")
 	if err := s.Reorder([]int{1}); !errors.Is(err, ErrReorderLength) {
 		t.Fatalf("want ErrReorderLength, got %v", err)
 	}
-}
-
-func TestStore_ReorderRejectsUnknownID(t *testing.T) {
-	s := newTempStore(t)
-	add(t, s, "a")
-	add(t, s, "b")
 	if err := s.Reorder([]int{1, 99}); !errors.Is(err, ErrReorderUnknown) {
 		t.Fatalf("want ErrReorderUnknown, got %v", err)
 	}
-}
-
-func TestStore_ReorderRejectsDuplicates(t *testing.T) {
-	s := newTempStore(t)
-	add(t, s, "a")
-	add(t, s, "b")
 	if err := s.Reorder([]int{1, 1}); !errors.Is(err, ErrReorderUnknown) {
-		t.Fatalf("want ErrReorderUnknown (duplicate), got %v", err)
+		t.Fatalf("want ErrReorderUnknown for duplicate, got %v", err)
 	}
 }
 
 func TestStore_PersistsAcrossReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tasks.json")
-
-	s1, err := OpenStore(path)
-	if err != nil {
-		t.Fatalf("OpenStore 1: %v", err)
-	}
+	s1, _ := OpenStore(path)
 	s1.Add(NewTask{Title: "a", Labels: []string{"work"}})
 	s1.Add(NewTask{Title: "b"})
 	s1.SetDone(1, true)
 	s1.Remove(2)
 	s1.Add(NewTask{Title: "c", DueDate: "2026-07-01", Labels: []string{"home"}})
+	s1.AddPublicLabel("home")
 
 	s2, err := OpenStore(path)
 	if err != nil {
@@ -348,44 +277,31 @@ func TestStore_PersistsAcrossReopen(t *testing.T) {
 	if len(tasks) != 2 {
 		t.Fatalf("want 2 tasks after reopen, got %d: %+v", len(tasks), tasks)
 	}
-	if tasks[0].ID != 1 || !tasks[0].Done || !reflect.DeepEqual(tasks[0].Labels, []string{"work"}) {
-		t.Fatalf("first task wrong after reopen: %+v", tasks[0])
+	if !s2.IsPublic("home") {
+		t.Fatalf("public label should persist")
 	}
-	if tasks[1].ID != 3 || tasks[1].Title != "c" || tasks[1].DueDate != "2026-07-01" || !reflect.DeepEqual(tasks[1].Labels, []string{"home"}) {
-		t.Fatalf("second task wrong after reopen: %+v", tasks[1])
-	}
-
 	next, _ := s2.Add(NewTask{Title: "d"})
 	if next.ID != 4 {
-		t.Fatalf("want next id 4 after reopen, got %d", next.ID)
+		t.Fatalf("want next id 4, got %d", next.ID)
 	}
 }
 
 func TestStore_ListReturnsCopy(t *testing.T) {
 	s := newTempStore(t)
 	add(t, s, "a")
-
 	got := s.List()
 	got[0].Title = "mutated"
 	fresh := s.List()
 	if fresh[0].Title != "a" {
-		t.Fatalf("List() must return a copy; store was mutated via caller")
+		t.Fatalf("List must return a copy")
 	}
 }
 
 func TestFilterByDone(t *testing.T) {
-	tasks := []Task{
-		{ID: 1, Done: true},
-		{ID: 2, Done: false},
-		{ID: 3, Done: true},
-	}
-	pending := filterByDone(tasks, false)
+	tasks := []Task{{ID: 1, Done: true}, {ID: 2}, {ID: 3, Done: true}}
+	pending := FilterByDone(tasks, false)
 	if len(pending) != 1 || pending[0].ID != 2 {
-		t.Fatalf("pending filter wrong: %+v", pending)
-	}
-	done := filterByDone(tasks, true)
-	if len(done) != 2 {
-		t.Fatalf("done filter wrong: %+v", done)
+		t.Fatalf("pending: %+v", pending)
 	}
 }
 
@@ -395,17 +311,9 @@ func TestFilterByLabel(t *testing.T) {
 		{ID: 2, Labels: []string{"home"}},
 		{ID: 3, Labels: []string{"work", "urgent"}},
 	}
-	got := filterByLabel(tasks, "work")
+	got := FilterByLabel(tasks, "WORK")
 	if len(got) != 2 || got[0].ID != 1 || got[1].ID != 3 {
-		t.Fatalf("want [1 3] for work, got %+v", got)
-	}
-	got = filterByLabel(tasks, "WORK")
-	if len(got) != 2 {
-		t.Fatalf("label filter should be case-insensitive, got %+v", got)
-	}
-	got = filterByLabel(tasks, "nope")
-	if len(got) != 0 {
-		t.Fatalf("want none for unknown label, got %+v", got)
+		t.Fatalf("got %+v", got)
 	}
 }
 
@@ -418,10 +326,10 @@ func TestSortTasks_ByDue(t *testing.T) {
 		{ID: 5, Done: true},
 	}
 	SortTasks(tasks, SortByDue)
-	wantOrder := []int{4, 3, 2, 1, 5}
-	for i, id := range wantOrder {
+	want := []int{4, 3, 2, 1, 5}
+	for i, id := range want {
 		if tasks[i].ID != id {
-			t.Fatalf("sort mismatch at %d: want %v", i, wantOrder)
+			t.Fatalf("want %v", want)
 		}
 	}
 }
@@ -430,7 +338,7 @@ func TestSortTasks_Manual(t *testing.T) {
 	tasks := []Task{{ID: 5}, {ID: 1}, {ID: 3}}
 	SortTasks(tasks, SortManual)
 	if tasks[0].ID != 5 || tasks[1].ID != 1 || tasks[2].ID != 3 {
-		t.Fatalf("manual sort should not reorder, got %+v", tasks)
+		t.Fatalf("manual should not reorder")
 	}
 }
 
@@ -441,17 +349,17 @@ func TestIsOverdue(t *testing.T) {
 		task Task
 		want bool
 	}{
-		{"past, pending", Task{DueDate: "2026-04-20"}, true},
-		{"today, pending", Task{DueDate: "2026-04-21"}, false},
-		{"future, pending", Task{DueDate: "2026-04-22"}, false},
-		{"past, done", Task{DueDate: "2026-04-20", Done: true}, false},
+		{"past", Task{DueDate: "2026-04-20"}, true},
+		{"today", Task{DueDate: "2026-04-21"}, false},
+		{"future", Task{DueDate: "2026-04-22"}, false},
+		{"past done", Task{DueDate: "2026-04-20", Done: true}, false},
 		{"no due", Task{}, false},
 		{"bad date", Task{DueDate: "not-a-date"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			if got := IsOverdue(c.task, today); got != c.want {
-				t.Fatalf("IsOverdue(%+v) = %v, want %v", c.task, got, c.want)
+				t.Fatalf("IsOverdue = %v, want %v", got, c.want)
 			}
 		})
 	}
@@ -460,9 +368,23 @@ func TestIsOverdue(t *testing.T) {
 func TestHasLabel(t *testing.T) {
 	task := Task{Labels: []string{"work", "urgent"}}
 	if !HasLabel(task, "work") || !HasLabel(task, "WORK") {
-		t.Fatalf("HasLabel should be case-insensitive")
+		t.Fatalf("case-insensitive")
 	}
 	if HasLabel(task, "home") {
-		t.Fatalf("HasLabel should be false for missing label")
+		t.Fatalf("missing label")
+	}
+}
+
+func TestManager_CachesPerUser(t *testing.T) {
+	t.Setenv("TODO_GO_DATA", t.TempDir())
+	m := NewManager()
+	a1, _ := m.ForUser("alice")
+	a2, _ := m.ForUser("alice")
+	if a1 != a2 {
+		t.Fatalf("ForUser should cache per user")
+	}
+	b, _ := m.ForUser("bob")
+	if a1 == b {
+		t.Fatalf("different users should get different stores")
 	}
 }

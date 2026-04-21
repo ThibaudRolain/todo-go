@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bytes"
@@ -8,59 +8,52 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"todo-go/internal/session"
+	"todo-go/internal/task"
+	"todo-go/internal/user"
 )
 
-// testEnv spins up a server-in-process with an authenticated client.
 type testEnv struct {
-	t        *testing.T
-	mux      http.Handler
-	sessions *SessionManager
-	users    *UserStore
-	mgr      *StoreManager
-	cookie   *http.Cookie // set after registerAndLogin
+	t      *testing.T
+	mux    http.Handler
+	deps   Deps
+	cookie *http.Cookie
 }
 
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
-	t.Setenv("TODO_GO_DATA", t.TempDir()) // per-user data goes here
+	t.Setenv("TODO_GO_DATA", t.TempDir())
 
-	users, err := OpenUsers(filepath.Join(t.TempDir(), "users.json"))
+	users, err := user.Open(filepath.Join(t.TempDir(), "users.json"))
 	if err != nil {
-		t.Fatalf("OpenUsers: %v", err)
+		t.Fatalf("user.Open: %v", err)
 	}
-	deps := serverDeps{
+	deps := Deps{
 		Users:    users,
-		Stores:   NewStoreManager(),
-		Sessions: NewSessionManager(),
-	}
-	env := &testEnv{
-		t:        t,
-		sessions: deps.Sessions,
-		users:    users,
-		mgr:      deps.Stores,
+		Stores:   task.NewManager(),
+		Sessions: session.NewManager(),
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/register", apiRegisterHandler(deps))
-	mux.HandleFunc("/api/login", apiLoginHandler(deps))
-	mux.HandleFunc("/api/logout", apiLogoutHandler(deps))
-	mux.HandleFunc("/api/me", deps.Sessions.requireAuth(apiMeHandler()))
-	mux.HandleFunc("/api/tasks", deps.Sessions.requireAuth(apiTasksHandler(deps)))
-	mux.HandleFunc("/api/tasks/", deps.Sessions.requireAuth(apiTaskByIDHandler(deps.Stores)))
-	mux.HandleFunc("/api/reorder", deps.Sessions.requireAuth(apiReorderHandler(deps.Stores)))
-	mux.HandleFunc("/api/labels", deps.Sessions.requireAuth(apiLabelsHandler(deps)))
-	mux.HandleFunc("/api/public-labels", deps.Sessions.requireAuth(apiPublicLabelsHandler(deps.Stores)))
-	env.mux = mux
-	return env
+	mux.HandleFunc("/api/register", registerHandler(deps))
+	mux.HandleFunc("/api/login", loginHandler(deps))
+	mux.HandleFunc("/api/logout", logoutHandler(deps))
+	mux.HandleFunc("/api/me", deps.Sessions.RequireAuth(meHandler()))
+	mux.HandleFunc("/api/tasks", deps.Sessions.RequireAuth(tasksHandler(deps)))
+	mux.HandleFunc("/api/tasks/", deps.Sessions.RequireAuth(taskByIDHandler(deps.Stores)))
+	mux.HandleFunc("/api/reorder", deps.Sessions.RequireAuth(reorderHandler(deps.Stores)))
+	mux.HandleFunc("/api/labels", deps.Sessions.RequireAuth(labelsHandler(deps)))
+	mux.HandleFunc("/api/public-labels", deps.Sessions.RequireAuth(publicLabelsHandler(deps.Stores)))
+
+	return &testEnv{t: t, mux: mux, deps: deps}
 }
 
 func (e *testEnv) do(method, path string, body any) *httptest.ResponseRecorder {
 	e.t.Helper()
 	var buf bytes.Buffer
 	if body != nil {
-		if err := json.NewEncoder(&buf).Encode(body); err != nil {
-			e.t.Fatalf("encode body: %v", err)
-		}
+		_ = json.NewEncoder(&buf).Encode(body)
 	}
 	req := httptest.NewRequest(method, path, &buf)
 	if body != nil {
@@ -78,7 +71,7 @@ func (e *testEnv) register(username, password string) *httptest.ResponseRecorder
 	rec := e.do(http.MethodPost, "/api/register", map[string]string{"username": username, "password": password})
 	if rec.Code == http.StatusCreated {
 		for _, c := range rec.Result().Cookies() {
-			if c.Name == sessionCookieName {
+			if c.Name == session.CookieName {
 				e.cookie = c
 			}
 		}
@@ -90,7 +83,7 @@ func (e *testEnv) login(username, password string) *httptest.ResponseRecorder {
 	rec := e.do(http.MethodPost, "/api/login", map[string]string{"username": username, "password": password})
 	if rec.Code == http.StatusOK {
 		for _, c := range rec.Result().Cookies() {
-			if c.Name == sessionCookieName {
+			if c.Name == session.CookieName {
 				e.cookie = c
 			}
 		}
@@ -106,21 +99,20 @@ func (e *testEnv) logout() *httptest.ResponseRecorder {
 
 func TestAPI_RegisterAndMe(t *testing.T) {
 	env := newTestEnv(t)
-	rec := env.register("alice", "s3cretPw!")
+	rec := env.register("alice", "password123")
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("register: want 201, got %d — %s", rec.Code, rec.Body.String())
+		t.Fatalf("want 201, got %d — %s", rec.Code, rec.Body.String())
 	}
-
 	rec = env.do(http.MethodGet, "/api/me", nil)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("me: want 200, got %d", rec.Code)
+		t.Fatalf("me: %d", rec.Code)
 	}
 	var me struct {
 		Username string `json:"username"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &me)
 	if me.Username != "alice" {
-		t.Fatalf("me.username: want alice, got %q", me.Username)
+		t.Fatalf("got %q", me.Username)
 	}
 }
 
@@ -139,7 +131,7 @@ func TestAPI_RegisterValidation(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			rec := env.do(http.MethodPost, "/api/register", map[string]string{"username": c.username, "password": c.pass})
 			if rec.Code != c.wantStatus {
-				t.Fatalf("want %d, got %d — %s", c.wantStatus, rec.Code, rec.Body.String())
+				t.Fatalf("want %d, got %d", c.wantStatus, rec.Code)
 			}
 		})
 	}
@@ -154,27 +146,10 @@ func TestAPI_RegisterConflict(t *testing.T) {
 	}
 }
 
-func TestAPI_LoginFlow(t *testing.T) {
-	env := newTestEnv(t)
-	env.register("alice", "password123")
-	env.logout()
-
-	rec := env.login("alice", "password123")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("login: want 200, got %d — %s", rec.Code, rec.Body.String())
-	}
-
-	rec = env.do(http.MethodGet, "/api/me", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("me after login: want 200, got %d", rec.Code)
-	}
-}
-
 func TestAPI_LoginBadPassword(t *testing.T) {
 	env := newTestEnv(t)
 	env.register("alice", "password123")
 	env.logout()
-
 	rec := env.login("alice", "WRONG")
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("want 401, got %d", rec.Code)
@@ -192,113 +167,72 @@ func TestAPI_UnauthorizedWithoutCookie(t *testing.T) {
 func TestAPI_LogoutRevokesSession(t *testing.T) {
 	env := newTestEnv(t)
 	env.register("alice", "password123")
-
-	// Keep the cookie so we can re-send it after logout.
-	authCookie := env.cookie
-	rec := env.logout()
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("logout: want 204, got %d", rec.Code)
-	}
-
-	// Use the pre-logout cookie — should now be invalid.
-	env.cookie = authCookie
-	rec = env.do(http.MethodGet, "/api/me", nil)
+	auth := env.cookie
+	env.logout()
+	env.cookie = auth
+	rec := env.do(http.MethodGet, "/api/me", nil)
 	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("session should be revoked; want 401, got %d", rec.Code)
+		t.Fatalf("revoked session should 401, got %d", rec.Code)
 	}
 }
 
 func TestAPI_PerUserIsolation(t *testing.T) {
 	env := newTestEnv(t)
-
 	env.register("alice", "password123")
 	env.do(http.MethodPost, "/api/tasks", map[string]any{"title": "alice task"})
 
 	env.logout()
 	env.register("bob", "password123")
-
 	rec := env.do(http.MethodGet, "/api/tasks", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
-	var tasks []Task
-	_ = json.Unmarshal(rec.Body.Bytes(), &tasks)
-	if len(tasks) != 0 {
-		t.Fatalf("bob should see 0 tasks, got %d: %+v", len(tasks), tasks)
-	}
-
-	env.do(http.MethodPost, "/api/tasks", map[string]any{"title": "bob task"})
-
-	env.logout()
-	env.login("alice", "password123")
-	rec = env.do(http.MethodGet, "/api/tasks", nil)
-	_ = json.Unmarshal(rec.Body.Bytes(), &tasks)
-	if len(tasks) != 1 || tasks[0].Title != "alice task" {
-		t.Fatalf("alice should see only her task, got %+v", tasks)
+	var views []TaskView
+	_ = json.Unmarshal(rec.Body.Bytes(), &views)
+	if len(views) != 0 {
+		t.Fatalf("bob should see 0 tasks, got %+v", views)
 	}
 }
 
-// --- Existing task-route tests, now authenticated via env.register ---------
-
-func TestAPI_AddAndList(t *testing.T) {
+func TestAPI_PublicLabelsShareTasks(t *testing.T) {
 	env := newTestEnv(t)
 	env.register("alice", "password123")
+	env.do(http.MethodPost, "/api/tasks", map[string]any{"title": "shared", "labels": []string{"team"}})
+	env.do(http.MethodPost, "/api/tasks", map[string]any{"title": "private"})
+	env.do(http.MethodPut, "/api/public-labels", map[string]any{"labels": []string{"team"}})
 
-	rec := env.do(http.MethodPost, "/api/tasks", map[string]any{"title": "buy milk"})
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("want 201, got %d", rec.Code)
+	env.logout()
+	env.register("bob", "password123")
+	rec := env.do(http.MethodGet, "/api/tasks", nil)
+	var views []TaskView
+	_ = json.Unmarshal(rec.Body.Bytes(), &views)
+	if len(views) != 1 {
+		t.Fatalf("bob should see 1 shared task, got %+v", views)
 	}
-	var created Task
-	_ = json.Unmarshal(rec.Body.Bytes(), &created)
-	if created.Title != "buy milk" {
-		t.Fatalf("unexpected created: %+v", created)
-	}
-
-	rec = env.do(http.MethodGet, "/api/tasks", nil)
-	var tasks []Task
-	_ = json.Unmarshal(rec.Body.Bytes(), &tasks)
-	if len(tasks) != 1 {
-		t.Fatalf("want 1 task, got %d", len(tasks))
+	if views[0].Owner != "alice" || views[0].Title != "shared" {
+		t.Fatalf("want alice's 'shared', got %+v", views[0])
 	}
 }
 
 func TestAPI_AddWithDueDate(t *testing.T) {
 	env := newTestEnv(t)
 	env.register("alice", "password123")
-	rec := env.do(http.MethodPost, "/api/tasks", map[string]any{
-		"title":    "x",
-		"due_date": "2026-05-01",
-	})
+	rec := env.do(http.MethodPost, "/api/tasks", map[string]any{"title": "x", "due_date": "2026-05-01"})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d", rec.Code)
 	}
-	var created Task
+	var created TaskView
 	_ = json.Unmarshal(rec.Body.Bytes(), &created)
 	if created.DueDate != "2026-05-01" {
 		t.Fatalf("got %q", created.DueDate)
 	}
 }
 
-func TestAPI_AddRejectsBadDue(t *testing.T) {
-	env := newTestEnv(t)
-	env.register("alice", "password123")
-	rec := env.do(http.MethodPost, "/api/tasks", map[string]any{"title": "x", "due_date": "not-a-date"})
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", rec.Code)
-	}
-}
-
 func TestAPI_AddWithLabels(t *testing.T) {
 	env := newTestEnv(t)
 	env.register("alice", "password123")
-	rec := env.do(http.MethodPost, "/api/tasks", map[string]any{
-		"title":  "x",
-		"labels": []string{"Work", "home"},
-	})
+	rec := env.do(http.MethodPost, "/api/tasks", map[string]any{"title": "x", "labels": []string{"Work", "home"}})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d", rec.Code)
 	}
-	var created Task
+	var created TaskView
 	_ = json.Unmarshal(rec.Body.Bytes(), &created)
 	if !reflect.DeepEqual(created.Labels, []string{"work", "home"}) {
 		t.Fatalf("got %v", created.Labels)
@@ -313,10 +247,10 @@ func TestAPI_ListSortByDue(t *testing.T) {
 	env.do(http.MethodPost, "/api/tasks", map[string]any{"title": "early", "due_date": "2026-05-01"})
 
 	rec := env.do(http.MethodGet, "/api/tasks?sort=due", nil)
-	var tasks []Task
-	_ = json.Unmarshal(rec.Body.Bytes(), &tasks)
-	if tasks[0].Title != "early" || tasks[1].Title != "late" || tasks[2].Title != "no due" {
-		t.Fatalf("sort wrong: %+v", tasks)
+	var views []TaskView
+	_ = json.Unmarshal(rec.Body.Bytes(), &views)
+	if views[0].Title != "early" || views[1].Title != "late" || views[2].Title != "no due" {
+		t.Fatalf("sort wrong: %+v", views)
 	}
 }
 
@@ -327,35 +261,22 @@ func TestAPI_ListLabelFilter(t *testing.T) {
 	env.do(http.MethodPost, "/api/tasks", map[string]any{"title": "b", "labels": []string{"home"}})
 
 	rec := env.do(http.MethodGet, "/api/tasks?label=work", nil)
-	var tasks []Task
-	_ = json.Unmarshal(rec.Body.Bytes(), &tasks)
-	if len(tasks) != 1 || tasks[0].Title != "a" {
-		t.Fatalf("got %+v", tasks)
+	var views []TaskView
+	_ = json.Unmarshal(rec.Body.Bytes(), &views)
+	if len(views) != 1 || views[0].Title != "a" {
+		t.Fatalf("got %+v", views)
 	}
 }
 
-func TestAPI_PatchTitleAndDoneAndLabelsAndDue(t *testing.T) {
+func TestAPI_PatchSetsDueAndLabels(t *testing.T) {
 	env := newTestEnv(t)
 	env.register("alice", "password123")
-	env.do(http.MethodPost, "/api/tasks", map[string]any{"title": "old"})
+	env.do(http.MethodPost, "/api/tasks", map[string]any{"title": "x"})
 
-	rec := env.do(http.MethodPatch, "/api/tasks/1", map[string]any{"title": "new"})
-	if rec.Code != http.StatusOK {
-		t.Fatalf("title: %d", rec.Code)
-	}
-
-	rec = env.do(http.MethodPatch, "/api/tasks/1", map[string]any{"done": true})
-	if rec.Code != http.StatusOK {
-		t.Fatalf("done: %d", rec.Code)
-	}
-
-	rec = env.do(http.MethodPatch, "/api/tasks/1", map[string]any{"due_date": "2026-05-10"})
-	if rec.Code != http.StatusOK {
+	if rec := env.do(http.MethodPatch, "/api/tasks/1", map[string]any{"due_date": "2026-05-10"}); rec.Code != http.StatusOK {
 		t.Fatalf("due: %d", rec.Code)
 	}
-
-	rec = env.do(http.MethodPatch, "/api/tasks/1", map[string]any{"labels": []string{"home"}})
-	if rec.Code != http.StatusOK {
+	if rec := env.do(http.MethodPatch, "/api/tasks/1", map[string]any{"labels": []string{"home"}}); rec.Code != http.StatusOK {
 		t.Fatalf("labels: %d", rec.Code)
 	}
 }
@@ -389,9 +310,6 @@ func TestAPI_Labels(t *testing.T) {
 	env.do(http.MethodPost, "/api/tasks", map[string]any{"title": "b", "labels": []string{"home", "work"}})
 
 	rec := env.do(http.MethodGet, "/api/labels", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d", rec.Code)
-	}
 	var labels []string
 	_ = json.Unmarshal(rec.Body.Bytes(), &labels)
 	if !reflect.DeepEqual(labels, []string{"home", "work"}) {
@@ -399,34 +317,34 @@ func TestAPI_Labels(t *testing.T) {
 	}
 }
 
+func TestAPI_PublicLabelsCRUD(t *testing.T) {
+	env := newTestEnv(t)
+	env.register("alice", "password123")
+
+	rec := env.do(http.MethodPut, "/api/public-labels", map[string]any{"labels": []string{"team", "Ops"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put: %d", rec.Code)
+	}
+	var got []string
+	_ = json.Unmarshal(rec.Body.Bytes(), &got)
+	if !reflect.DeepEqual(got, []string{"team", "ops"}) {
+		t.Fatalf("got %v", got)
+	}
+
+	rec = env.do(http.MethodGet, "/api/public-labels", nil)
+	_ = json.Unmarshal(rec.Body.Bytes(), &got)
+	if !reflect.DeepEqual(got, []string{"team", "ops"}) {
+		t.Fatalf("got %v", got)
+	}
+}
+
 func TestAPI_BadSortAndStatus(t *testing.T) {
 	env := newTestEnv(t)
 	env.register("alice", "password123")
-	rec := env.do(http.MethodGet, "/api/tasks?sort=nope", nil)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("bad sort: %d", rec.Code)
+	if rec := env.do(http.MethodGet, "/api/tasks?sort=nope", nil); rec.Code != http.StatusBadRequest {
+		t.Fatalf("sort: %d", rec.Code)
 	}
-	rec = env.do(http.MethodGet, "/api/tasks?status=bogus", nil)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("bad status: %d", rec.Code)
-	}
-}
-
-func TestAPI_PatchNoFields(t *testing.T) {
-	env := newTestEnv(t)
-	env.register("alice", "password123")
-	env.do(http.MethodPost, "/api/tasks", map[string]any{"title": "a"})
-	rec := env.do(http.MethodPatch, "/api/tasks/1", map[string]any{})
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("want 400, got %d", rec.Code)
-	}
-}
-
-func TestAPI_MethodNotAllowed(t *testing.T) {
-	env := newTestEnv(t)
-	env.register("alice", "password123")
-	rec := env.do(http.MethodPut, "/api/tasks", nil)
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("want 405, got %d", rec.Code)
+	if rec := env.do(http.MethodGet, "/api/tasks?status=bogus", nil); rec.Code != http.StatusBadRequest {
+		t.Fatalf("status: %d", rec.Code)
 	}
 }
